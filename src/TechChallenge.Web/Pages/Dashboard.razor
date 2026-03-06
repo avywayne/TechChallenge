@@ -1,0 +1,327 @@
+@page "/"
+@using Microsoft.EntityFrameworkCore
+@using TaskStatus = TechChallenge.Web.Models.TaskStatus
+@inject AppDbContext Db
+@inject IJSRuntime JS
+
+
+<PageTitle>Dashboard – TaskFlow Pro</PageTitle>
+
+@if (_loading)
+{
+    <div class="empty-state"><div class="spinner"></div></div>
+}
+else
+{
+    <div class="mb-6">
+        <h1 style="font-size:22px;font-weight:700;margin-bottom:4px;">Dashboard</h1>
+        <p class="text-muted">Overview of your team's work</p>
+    </div>
+
+    <div class="kpi-grid">
+        <div class="kpi-card info">
+            <div class="kpi-label">Open Tasks</div>
+            <div class="kpi-value">@_openTasks</div>
+            <div class="kpi-sub">Backlog + In Progress + Blocked</div>
+        </div>
+        <div class="kpi-card danger">
+            <div class="kpi-label">Overdue</div>
+            <div class="kpi-value">@_overdue</div>
+            <div class="kpi-sub">Past due date, not done</div>
+        </div>
+        <div class="kpi-card warning">
+            <div class="kpi-label">Blocked</div>
+            <div class="kpi-value">@_blocked</div>
+            <div class="kpi-sub">Needs attention</div>
+        </div>
+        <div class="kpi-card success">
+            <div class="kpi-label">Due This Week</div>
+            <div class="kpi-value">@_dueThisWeek</div>
+            <div class="kpi-sub">Including today</div>
+        </div>
+        </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;" class="dashboard-grid">
+
+        <!-- Recent tasks -->
+        <div class="card">
+            <div class="card-header">
+                <div class="card-title">Recent Tasks</div>
+                <a href="/tasks" class="btn btn-ghost btn-sm">View all</a>
+            </div>
+            @if (_recentTasks.Count == 0)
+            {
+                <div class="empty-state" style="padding:32px;">
+                    <div class="empty-icon">✅</div>
+                    <div class="empty-title">No tasks yet</div>
+                </div>
+            }
+            else
+            {
+                <div class="table-wrap">
+                    <table class="tf-table">
+                        <thead>
+                            <tr>
+                                <th>Title</th>
+                                <th>Status</th>
+                                <th>Priority</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var t in _recentTasks)
+                            {
+                                <tr>
+                                    <td style="color:var(--text);">@t.Title</td>
+                                    <td><span class="badge @StatusBadge(t.Status)">@t.Status</span></td>
+                                    <td><span class="badge @PriorityBadge(t.Priority)">@t.Priority</span></td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </div>
+
+        <!-- Projects summary -->
+        <div class="card">
+            <div class="card-header">
+                <div class="card-title">Active Projects</div>
+                <a href="/projects" class="btn btn-ghost btn-sm">View all</a>
+            </div>
+            @if (_projects.Count == 0)
+            {
+                <div class="empty-state" style="padding:32px;">
+                    <div class="empty-icon">📁</div>
+                    <div class="empty-title">No projects yet</div>
+                </div>
+            }
+            else
+            {
+                <div class="table-wrap">
+                    <table class="tf-table">
+                        <thead>
+                            <tr>
+                                <th>Project</th>
+                                <th>Code</th>
+                                <th>Tasks</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var p in _projects)
+                            {
+                                <tr>
+                                    <td style="color:var(--text);">@p.Name</td>
+                                    <td><span class="badge badge-inprogress">@p.Code</span></td>
+                                    <td>@p.Tasks.Count</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </div>
+               <!-- Fast-closed tasks -->
+        @if (_fastClosedTasks.Count > 0)
+        {
+            <div class="card" style="margin-top:16px;">
+                <div class="card-header">
+                    <div class="card-title">⚡ Fast-closed Tasks</div>
+                    <a href="/tasks" class="btn btn-ghost btn-sm">View all</a>
+                </div>
+                <div class="table-wrap">
+                    <table class="tf-table">
+                        <thead>
+                            <tr>
+                                <th>Title</th>
+                                <th>Project</th>
+                                <th>Reason</th>
+                                <th>Status</th>
+                                <th>Closed</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var t in _fastClosedTasks)
+                            {
+                                <tr>
+                                    <td>
+                                        <div style="color:var(--text);font-weight:500;">@t.Title</div>
+                                        <span class="badge badge-blocked" style="font-size:10px;">⚡ Fast-closed</span>
+                                    </td>
+                                    <td>
+                                        @if (t.Project is not null)
+                                        {
+                                            <span class="badge badge-inprogress">@t.Project.Code</span>
+                                        }
+                                    </td>
+                                    <td class="text-dim" style="font-size:12.5px;">
+                                        @(string.IsNullOrEmpty(t.CloseReason) ? "—" : t.CloseReason)
+                                    </td>
+                                    <td><span class="badge @StatusBadge(t.Status)">@t.Status</span></td>
+                                    <td class="text-dim" style="font-size:12.5px;">
+                                        @t.UpdatedAtUtc.ToLocalTime().ToString("MMM dd, yyyy")
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        }
+        <!-- Task distribution donut chart -->
+        <div class="card">
+            <div class="card-header">
+                <div class="card-title">Task Distribution</div>
+            </div>
+            <div style="display:flex;justify-content:center;align-items:center;padding:16px;">
+                <div style="width:130px;height:130px;position:relative;">
+                    <canvas id="taskDonutChart"></canvas>
+                </div>
+            </div>
+            <div style="display:flex;justify-content:center;gap:16px;flex-wrap:wrap;padding:0 16px 16px;">
+                @foreach (var s in _tasksByStatus)
+                {
+                    <div style="display:flex;align-items:center;gap:6px;font-size:12px;">
+                        <span style="width:10px;height:10px;border-radius:50%;background:@StatusColor(s.Key);display:inline-block;"></span>
+                        <span style="color:var(--text-dim);">@s.Key</span>
+                        <span style="color:var(--text);font-weight:600;">@s.Value</span>
+                    </div>
+                }
+            </div>
+        </div>
+    </div>
+}
+
+<style>
+    @@media (max-width: 768px) {
+        .dashboard-grid { grid-template-columns: 1fr !important; }
+    }
+</style>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script>
+    window.renderTaskDonut = function(labels, data, colors) {
+        const ctx = document.getElementById('taskDonutChart');
+        if (!ctx) return;
+        if (window._taskDonutInstance) window._taskDonutInstance.destroy();
+        window._taskDonutInstance = new Chart(ctx, {
+            type: 'doughnut',
+            data: {
+                labels: labels,
+                datasets: [{
+                    data: data,
+                    backgroundColor: colors,
+                    borderWidth: 2,
+                    borderColor: '#1a1d27',
+                    hoverOffset: 6
+                }]
+            },
+            options: {
+                cutout: '70%',
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        callbacks: {
+                            label: ctx => ` ${ctx.label}: ${ctx.raw} tasks`
+                        }
+                    }
+                },
+                animation: { duration: 600 }
+            }
+        });
+    };
+</script>
+
+@code {
+    bool _loading = true;
+    int _openTasks, _overdue, _blocked, _dueThisWeek;
+    List<TaskItem> _recentTasks = new();
+    List<Project> _projects = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        var now     = DateTime.UtcNow;
+        var weekEnd = now.Date.AddDays(7 - (int)now.DayOfWeek);
+
+        var baseTasks = Db.Tasks
+            .Where(x => x.ParentTaskId == null
+                    && !x.Project!.IsArchived
+                    && (x.AssigneeId == null || x.Assignee!.IsActive));
+
+        _openTasks   = await baseTasks.CountAsync(x => x.Status != TaskStatus.Done);
+        _overdue     = await baseTasks.CountAsync(x => x.Status != TaskStatus.Done
+                                                    && x.DueDate.HasValue
+                                                    && x.DueDate.Value < now);
+        _blocked     = await baseTasks.CountAsync(x => x.Status == TaskStatus.Blocked);
+        _dueThisWeek = await baseTasks.CountAsync(x => x.Status != TaskStatus.Done
+                                                    && x.DueDate.HasValue
+                                                    && x.DueDate.Value.Date >= now.Date
+                                                    && x.DueDate.Value.Date <= weekEnd);
+        _fastClosed  = await baseTasks.CountAsync(x => x.IsFastClosed);
+
+        _tasksByStatus = await baseTasks
+            .GroupBy(t => t.Status)
+            .Select(g => new { Status = g.Key, Count = g.Count() })
+            .ToDictionaryAsync(x => x.Status, x => x.Count);
+
+        _recentTasks = await baseTasks
+            .Include(x => x.Project)
+            .OrderByDescending(x => x.UpdatedAtUtc)
+            .Take(6)
+            .ToListAsync();
+
+        _projects = await Db.Projects
+            .AsNoTracking()
+            .Include(x => x.Tasks)
+            .Where(x => !x.IsArchived)
+            .OrderBy(x => x.Name)
+            .ToListAsync();
+
+        _fastClosedTasks = await baseTasks
+            .Include(x => x.Project)
+            .Where(x => x.IsFastClosed)
+            .OrderByDescending(x => x.UpdatedAtUtc)
+            .Take(10)
+            .ToListAsync();
+
+        _loading = false;
+    }
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!_loading && _tasksByStatus.Count > 0)
+        {
+            var labels = _tasksByStatus.Keys.Select(s => s.ToString()).ToArray();
+            var data   = _tasksByStatus.Values.Select(v => (object)v).ToArray();
+            var colors = _tasksByStatus.Keys.Select(StatusColor).ToArray();
+            await JS.InvokeVoidAsync("renderTaskDonut", labels, data, colors);
+        }
+    }
+
+    string StatusBadge(TaskStatus s) => s switch
+    {
+        TaskStatus.Backlog    => "badge-backlog",
+        TaskStatus.InProgress => "badge-inprogress",
+        TaskStatus.Blocked    => "badge-blocked",
+        TaskStatus.Done       => "badge-done",
+        _                     => ""
+    };
+
+    string PriorityBadge(TaskPriority p) => p switch
+    {
+        TaskPriority.Low      => "badge-low",
+        TaskPriority.Medium   => "badge-medium",
+        TaskPriority.High     => "badge-high",
+        TaskPriority.Critical => "badge-critical",
+        _                     => ""
+    };
+    int _fastClosed;
+    List<TaskItem> _fastClosedTasks = new();
+    private Dictionary<TaskStatus, int> _tasksByStatus = new();
+    
+    private static string StatusColor(TaskStatus s) => s switch
+    {
+        TaskStatus.Backlog    => "#94a3b8",
+        TaskStatus.InProgress => "#60a5fa",
+        TaskStatus.Blocked    => "#f87171",
+        TaskStatus.Done       => "#4ade80",
+        _                     => "#6c63ff"
+    };
+}

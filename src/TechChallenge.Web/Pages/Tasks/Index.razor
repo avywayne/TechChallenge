@@ -1,0 +1,1550 @@
+@page "/tasks"
+@using TaskStatus = TechChallenge.Web.Models.TaskStatus
+@inject ITaskService TaskService
+@inject IProjectService ProjectService
+@inject ITeamMemberService MemberService
+@inject IJSRuntime JS
+@inject TaskStateMachine StateMachine
+
+<PageTitle>Tasks - TaskFlow Pro</PageTitle>
+
+<!-- Page header -->
+<div class="flex justify-between items-center mb-6">
+    <div>
+        <h1 style="font-size:22px;font-weight:700;margin-bottom:4px;">Tasks</h1>
+        <p class="text-muted">Track and manage all work items</p>
+    </div>
+    <div class="flex gap-2 items-center">
+        <div class="view-toggle">
+            <button class="view-toggle-btn @(_viewMode == "table" ? "active" : "")"
+                    @onclick='() => SetViewMode("table")'
+                    aria-label="Table view" title="Table view">
+                Table
+            </button>
+            <button class="view-toggle-btn @(_viewMode == "kanban" ? "active" : "")"
+                    @onclick='() => SetViewMode("kanban")'
+                    aria-label="Kanban view" title="Kanban view">
+                Kanban
+            </button>
+        </div>
+        <button class="btn btn-primary" @onclick="OpenCreate">+ New Task</button>
+    </div>
+</div>
+
+<!-- Filters & Search bar -->
+<div class="filters-bar mb-4">
+    <input class="form-control search-input"
+           type="search"
+           placeholder="Search by title or description..."
+           @bind="_search"
+           @bind:event="oninput"
+           @bind:after="FilterChangedAsync"
+           aria-label="Search tasks" />
+
+    <select class="form-control" @bind="_filterProjectId" @bind:after="FilterChangedAsync" aria-label="Filter by project">
+        <option value="">All Projects</option>
+        @foreach (var p in _projects)
+        {
+            <option value="@p.Id">@p.Name</option>
+        }
+    </select>
+
+    <select class="form-control" @bind="_filterStatus" @bind:after="FilterChangedAsync" aria-label="Filter by status">
+        <option value="">All Statuses</option>
+        @foreach (var s in Enum.GetValues<TaskStatus>())
+        {
+            <option value="@s">@s</option>
+        }
+    </select>
+
+    <select class="form-control" @bind="_filterPriority" @bind:after="FilterChangedAsync" aria-label="Filter by priority">
+        <option value="">All Priorities</option>
+        @foreach (var p in Enum.GetValues<TaskPriority>())
+        {
+            <option value="@p">@p</option>
+        }
+    </select>
+
+    <select class="form-control" @bind="_filterAssigneeId" @bind:after="FilterChangedAsync" aria-label="Filter by assignee">
+        <option value="">All Assignees</option>
+        @foreach (var m in _members)
+        {
+            <option value="@m.Id">@m.FullName</option>
+        }
+    </select>
+
+    <select class="form-control" @bind="_sortBy" @bind:after="FilterChangedAsync" aria-label="Sort by">
+        <option value="">Sort: Priority</option>
+        <option value="dueDate">Sort: Due Date</option>
+        <option value="updatedDate">Sort: Last Updated</option>
+    </select>
+</div>
+
+@if (_loading)
+{
+    <div class="empty-state"><div class="spinner"></div></div>
+}
+else if (_tasks.Count == 0 && _viewMode == "table")
+{
+    <div class="card">
+        <div class="empty-state">
+            <div class="empty-icon">&#x2705;</div>
+            <div class="empty-title">No tasks found</div>
+            <div class="empty-sub">
+                @if (!string.IsNullOrEmpty(_search) || _filterProjectId != null || _filterStatus != null || _filterPriority != null)
+                {
+                    <span>Try adjusting your filters</span>
+                }
+                else
+                {
+                    <span>Create your first task to get started</span>
+                }
+            </div>
+            @if (string.IsNullOrEmpty(_search))
+            {
+                <button class="btn btn-primary" style="margin-top:8px;" @onclick="OpenCreate">+ New Task</button>
+            }
+        </div>
+    </div>
+}
+else
+{
+    @if (_viewMode == "table")
+    {
+        <div class="card">
+            <div class="table-wrap">
+                <table class="tf-table">
+                    <thead>
+                        <tr>
+                            <th>Title</th>
+                            <th>Project</th>
+                            <th>Status</th>
+                            <th>Priority</th>
+                            <th>Assignee</th>
+                            <th>Due Date</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var t in _tasks)
+                        {
+                            var expanded = _expandedTasks.Contains(t.Id);
+                            <tr class="@(IsOverdue(t) ? "overdue-row" : "")">
+                                <td>
+                                    <div style="display:flex;align-items:center;gap:8px;">
+                                        @if (t.SubTasks.Any() || true)
+                                        {
+                                            <button class="subtask-toggle @(expanded ? "expanded" : "")"
+                                                    @onclick="() => ToggleSubTasksAsync(t)"
+                                                    title="@GetSubTaskToggleTitle(expanded)">
+                                                @(expanded ? "▾" : "▸")
+                                            </button>
+                                        }
+                                        <div>
+                                            <div style="color:var(--text);font-weight:500;">@t.Title</div>
+                                            @if (!string.IsNullOrEmpty(t.Description))
+                                            {
+                                                <div class="text-muted" style="font-size:12px;margin-top:2px;">
+                                                    @Truncate(t.Description, 60)
+                                                </div>
+                                            }
+                                            @if (t.IsFastClosed)
+                                            {
+                                                <div style="display:flex;align-items:center;gap:6px;margin-top:3px;">
+                                                    <span class="badge badge-blocked" style="font-size:10px;">⚡ Fast-closed</span>
+                                                    @if (!string.IsNullOrEmpty(t.CloseReason))
+                                                    {
+                                                        <span class="text-muted" style="font-size:11px;">@t.CloseReason</span>
+                                                    }
+                                                </div>
+                                            }
+                                        </div>
+                                    </div>
+                                </td>
+                                <td>
+                                    @if (t.Project is not null)
+                                    {
+                                        <span class="badge badge-inprogress">@t.Project.Code</span>
+                                    }
+                                </td>
+                                <td><span class="badge @StatusBadge(t.Status)">@t.Status</span></td>
+                                <td><span class="badge @PriorityBadge(t.Priority)">@t.Priority</span></td>
+                                <td class="text-dim">
+                                    @if (t.Assignee is not null) { @t.Assignee.FullName }
+                                    else { <span class="text-muted">Unassigned</span> }
+                                </td>
+                                <td>
+                                    @if (t.DueDate.HasValue)
+                                    {
+                                        <span class="@(IsOverdue(t) ? "text-danger" : "text-dim")" style="font-size:13px;">
+                                            @(IsOverdue(t) ? "⚠️ " : "")@t.DueDate.Value.ToLocalTime().ToString("MMM dd, yyyy")
+                                        </span>
+                                    }
+                                    else { <span class="text-muted">—</span> }
+                                </td>
+                                <td>
+                                    <div class="flex gap-2">
+                                        @if (t.SubTasks.Any())
+                                        {
+                                            <span class="badge @SubTaskBadgeClass(t)"
+                                                  style="font-size:10px;cursor:pointer;"
+                                                  @onclick="() => ToggleSubTasksAsync(t)"
+                                                  title="Subtasks: @SubTaskProgress(t)">
+                                                ⊞ @SubTaskProgress(t)
+                                            </span>
+                                        }
+                                        <button class="btn btn-ghost btn-sm" @onclick="() => OpenEdit(t)" aria-label="Edit">✏️</button>
+                                        <button class="btn btn-ghost btn-sm" @onclick="() => OpenTransition(t)" aria-label="Change status">🔄</button>
+                                        <button class="btn btn-danger btn-sm" @onclick="() => ConfirmDelete(t)" aria-label="Delete">🗑️</button>
+                                    </div>
+                                </td>
+                            </tr>
+
+                            @if (expanded)
+                            {
+                                <tr class="subtask-panel-row">
+                                    <td colspan="7">
+                                        <div class="subtask-panel">
+                                            @foreach (var sub in _subTasks.GetValueOrDefault(t.Id, new()))
+                                            {
+                                                <div class="subtask-row">
+                                                    <button class="subtask-status-btn @StatusBadge(sub.Status)"
+                                                            @onclick="() => CycleSubTaskStatusAsync(sub, t.Id)"
+                                                            title="@sub.Status — click to advance">
+                                                        @(sub.Status == TaskStatus.Done ? "✓" : "○")
+                                                    </button>
+                                                    <span class="subtask-title @(sub.Status == TaskStatus.Done ? "done" : "")">
+                                                        @sub.Title
+                                                    </span>
+                                                    <span class="badge @PriorityBadge(sub.Priority)" style="font-size:10px;">
+                                                        @sub.Priority
+                                                    </span>
+                                                    <button class="btn btn-ghost btn-sm btn-icon subtask-delete"
+                                                            @onclick="() => DeleteSubTaskAsync(sub.Id, t.Id)">🗑️</button>
+                                                </div>
+                                            }
+                                            <div class="subtask-add-row">
+                                                <input class="form-control subtask-input" 
+                                                       placeholder="New subtask title... (Enter to save)"
+                                                       value="@_newSubTaskTitle.GetValueOrDefault(t.Id, string.Empty)"
+                                                       @oninput="e => OnSubTaskInput(e, t.Id)"
+                                                       @onkeydown="e => OnSubTaskKeyDown(e, t)" />
+                                                <button class="btn btn-primary btn-sm"
+                                                        disabled="@_savingSubTask.GetValueOrDefault(t.Id, false)"
+                                                        @onclick="() => AddSubTaskAsync(t)">
+                                                    + Add
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </td>
+                                </tr>
+                            }
+                        }
+                    </tbody>
+                </table>
+            </div>
+            <Pagination T="TaskItem" Result="_result" OnPageChange="GoToPageAsync" />
+        </div>
+    }
+    else
+    {
+        @if (_dragging)
+        {
+            <div class="drag-hint">Drop the card into a column to change its status</div>
+        }
+
+        <div class="kanban-board">
+            @foreach (var status in Enum.GetValues<TaskStatus>())
+            {
+                var columnTasks  = _tasks.Where(t => t.Status == status).ToList();
+                var isDropTarget = _dragOverStatus == status;
+
+                <div class="kanban-column @(isDropTarget ? "kanban-drop-target" : "")"
+                     ondragover="event.preventDefault()"
+                     @ondragenter="() => OnDragEnter(status)"
+                     @ondragleave="OnDragLeave"
+                     @ondrop="() => OnDrop(status)">
+
+                    <div class="kanban-column-header">
+                        <div class="flex items-center gap-2">
+                            <span class="badge @StatusBadge(status)">@status</span>
+                            <span class="kanban-count">@columnTasks.Count</span>
+                        </div>
+                        <button class="btn btn-ghost btn-sm btn-icon"
+                                @onclick="() => OpenCreateWithStatus(status)"
+                                title="Add task">+</button>
+                    </div>
+
+                    <div class="kanban-cards">
+                        @if (columnTasks.Count == 0)
+                        {
+                            <div class="kanban-empty @(isDropTarget ? "kanban-empty-active" : "")">
+                                @(isDropTarget ? "Drop here" : "No tasks")
+                            </div>
+                        }
+
+                        @foreach (var t in columnTasks)
+                        {
+                            var isDraggingThis = _draggingTaskId == t.Id;
+                            var expanded       = _expandedTasks.Contains(t.Id);
+
+                            <div class="kanban-card @(IsOverdue(t) ? "kanban-card-overdue" : "") @(isDraggingThis ? "kanban-card-dragging" : "")"
+                                 draggable="true"
+                                 @ondragstart="() => OnDragStart(t)"
+                                 @ondragend="OnDragEnd">
+
+                                <div class="kanban-card-priority @PriorityBadge(t.Priority)"></div>
+
+                                <div class="kanban-card-body">
+                                    <div class="kanban-card-title">@t.Title</div>
+
+                                    @if (!string.IsNullOrEmpty(t.Description))
+                                    {
+                                        <div class="kanban-card-desc">@Truncate(t.Description, 80)</div>
+                                    }
+
+                                    <div class="kanban-card-meta">
+                                        @if (t.IsFastClosed)
+                                        {
+                                            <span class="badge badge-blocked" style="font-size:10px;">⚡ Fast-closed</span>
+                                        }
+                                        @if (t.Project is not null)
+                                        {
+                                            <span class="badge badge-inprogress" style="font-size:10px;">@t.Project.Code</span>
+                                        }
+                                        @if (t.DueDate.HasValue)
+                                        {
+                                            <span class="@(IsOverdue(t) ? "text-danger" : "text-muted")" style="font-size:11px;">
+                                                @(IsOverdue(t) ? "⚠️ " : "📅 ")@t.DueDate.Value.ToLocalTime().ToString("MMM dd")
+                                            </span>
+                                        }
+                                        @if (t.SubTasks.Any())
+                                        {
+                                            <span class="badge @SubTaskBadgeClass(t)"
+                                                  style="font-size:10px;cursor:pointer;"
+                                                  @onclick:stopPropagation="true"
+                                                  @onclick="() => ToggleSubTasksAsync(t)"
+                                                  title="Subtasks: @SubTaskProgress(t)">
+                                                ⊞ @SubTaskProgress(t)
+                                            </span>
+                                        }
+                                    </div>
+
+                                    @if (expanded)
+                                    {
+                                        <div class="subtask-panel kanban-subtask-panel" @onclick:stopPropagation="true">
+                                            @foreach (var sub in _subTasks.GetValueOrDefault(t.Id, new()))
+                                            {
+                                                <div class="subtask-row">
+                                                    <button class="subtask-status-btn @StatusBadge(sub.Status)"
+                                                            @onclick="() => CycleSubTaskStatusAsync(sub, t.Id)"
+                                                            title="@sub.Status">
+                                                        @(sub.Status == TaskStatus.Done ? "✓" : "○")
+                                                    </button>
+                                                    <span class="subtask-title @(sub.Status == TaskStatus.Done ? "done" : "")">
+                                                        @sub.Title
+                                                    </span>
+                                                    <button class="btn btn-ghost btn-sm btn-icon subtask-delete"
+                                                            @onclick="() => DeleteSubTaskAsync(sub.Id, t.Id)">🗑️</button>
+                                                </div>
+                                            }
+                                            <div class="subtask-add-row">
+                                                <input class="form-control subtask-input"
+                                                       placeholder="Add subtask..."
+                                                       value="@_newSubTaskTitle.GetValueOrDefault(t.Id, string.Empty)"
+                                                       @oninput="e => OnSubTaskInput(e, t.Id)"
+                                                       @onkeydown="e => OnSubTaskKeyDown(e, t)" />
+                                                <button class="btn btn-primary btn-sm"
+                                                        @onclick:stopPropagation="true"
+                                                        @onclick="() => AddSubTaskAsync(t)">+</button>
+                                            </div>
+                                        </div>
+                                    }
+
+                                    <div class="kanban-card-footer">
+                                        @if (t.Assignee is not null)
+                                        {
+                                            <div class="kanban-avatar" title="@t.Assignee.FullName">
+                                                @GetInitials(t.Assignee.FullName)
+                                            </div>
+                                        }
+                                        else
+                                        {
+                                            <span class="text-muted" style="font-size:11px;">Unassigned</span>
+                                        }
+                                        <div class="flex gap-2">
+                                            <button class="btn btn-ghost btn-sm btn-icon"
+                                                    @onclick:stopPropagation="true"
+                                                    @onclick="() => ToggleSubTasksAsync(t)"
+                                                    title="@GetSubTaskToggleTitle(expanded)">
+                                                @(expanded ? "▾" : "▸")
+                                            </button>
+                                            <button class="btn btn-ghost btn-sm btn-icon" @onclick="() => OpenEdit(t)" title="Edit">✏️</button>
+                                            <button class="btn btn-ghost btn-sm btn-icon" @onclick="() => OpenTransition(t)" title="Change status">🔄</button>
+                                            <button class="btn btn-danger btn-sm btn-icon" @onclick="() => ConfirmDelete(t)" title="Delete">🗑️</button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        }
+                    </div>
+                </div>
+            }
+        </div>
+    }
+}
+
+<!-- Toast notification -->
+@if (_message is not null)
+{
+    <div class="toast-container">
+        <div class="alert @(_isError ? "alert-danger" : "alert-success")">
+            @(_isError ? "⚠️" : "✅") @_message
+        </div>
+    </div>
+}
+
+<!-- Create / Edit modal -->
+@if (_showModal)
+{
+    <div class="modal-backdrop" @onclick="CloseModal">
+        <div class="modal" style="max-width:600px;" @onclick:stopPropagation="true"
+             role="dialog" aria-modal="true" aria-labelledby="task-modal-title">
+            <div class="modal-header">
+                <div class="modal-title" id="task-modal-title">
+                    @(_editId is null ? "New Task" : "Edit Task")
+                </div>
+                <button class="btn btn-ghost btn-sm btn-icon" @onclick="CloseModal" aria-label="Close">✕</button>
+            </div>
+            <EditForm Model="_form" OnValidSubmit="SaveAsync">
+                <DataAnnotationsValidator />
+                <div class="modal-body">
+                    @if (_formError is not null)
+                    {
+                        <div class="alert alert-danger">⚠️ @_formError</div>
+                    }
+                    @if (IsEditingDone)
+                    {
+                        <div class="alert alert-danger">🔒 This task is Done and cannot be edited.</div>
+                    }
+                    else if (IsEditingBlocked)
+                    {
+                        <div class="alert alert-danger">🚧 This task is Blocked. Only title and description can be edited.</div>
+                    }
+                    <div class="form-group">
+                        <label class="form-label" for="ttitle">Title *</label>
+                        <InputText id="ttitle" class="form-control" @bind-Value="_form.Title"
+                                   placeholder="e.g. Fix login bug" autocomplete="off" disabled="@IsEditingDone" />
+                        <ValidationMessage For="() => _form.Title" class="validation-message" />
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" for="tdesc">Description</label>
+                        <InputTextArea id="tdesc" class="form-control" @bind-Value="_form.Description"
+                                       placeholder="Optional details..." rows="3" disabled="@IsEditingDone"/>
+                        <ValidationMessage For="() => _form.Description" class="validation-message" />
+                    </div>
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+                        <div class="form-group">
+                            <label class="form-label" for="tproject">Project *</label>
+                            <InputSelect id="tproject" class="form-control" @bind-Value="_form.ProjectId" disabled="@(IsEditingBlocked || IsEditingDone)">
+                                <option value="0">— Select project —</option>
+                                @foreach (var p in _projects)
+                                {
+                                    <option value="@p.Id">@p.Name</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.ProjectId" class="validation-message" />
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="tassignee">Assignee</label>
+                            <InputSelect id="tassignee" class="form-control" @bind-Value="_form.AssigneeId" disabled="@(IsEditingBlocked || IsEditingDone)">
+                                <option value="">— Unassigned —</option>
+                                @foreach (var m in _members.Where(m => m.IsActive))
+                                {
+                                    <option value="@m.Id">@m.FullName</option>
+                                }
+                            </InputSelect>
+                        </div>
+                    </div>
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+                        <div class="form-group">
+                            <label class="form-label" for="tpriority">Priority</label>
+                            <InputSelect id="tpriority" class="form-control" @bind-Value="_form.Priority" disabled="@(IsEditingBlocked || IsEditingDone)">
+                                @foreach (var p in Enum.GetValues<TaskPriority>())
+                                {
+                                    <option value="@p">@p</option>
+                                }
+                            </InputSelect>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="tduedate">Due Date</label>
+                            <InputDate id="tduedate" class="form-control" @bind-Value="_form.DueDate" disabled="@(IsEditingBlocked || IsEditingDone)" />
+                        </div>
+                    </div>
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+                        <div class="form-group">
+                            <label class="form-label" for="testimated">Estimated Hours</label>
+                            <InputNumber id="testimated" class="form-control"
+                                         @bind-Value="_form.EstimatedHours" placeholder="e.g. 4.5" disabled="@(IsEditingBlocked || IsEditingDone)"/>
+                            <ValidationMessage For="() => _form.EstimatedHours" class="validation-message" />
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="tactual">Actual Hours</label>
+                            <InputNumber id="tactual" class="form-control"
+                                         @bind-Value="_form.ActualHours" placeholder="e.g. 3.0" disabled="@(IsEditingBlocked || IsEditingDone)"/>
+                            <ValidationMessage For="() => _form.ActualHours" class="validation-message" />
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-ghost" @onclick="CloseModal">Cancel</button>
+                    <button type="submit" class="btn btn-primary" disabled="@_saving">
+                        @if (_saving)
+                        {
+                            <span class="spinner" style="width:14px;height:14px;border-width:2px;"></span>
+                        }
+                        @(_editId is null ? "Create Task" : "Save Changes")
+                    </button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+<!-- Status transition modal -->
+@if (_showTransitionModal && _transitionTask is not null)
+{
+    <div class="modal-backdrop" @onclick="CloseTransitionModal">
+        <div class="modal" style="max-width:420px;" @onclick:stopPropagation="true"
+             role="dialog" aria-modal="true" aria-labelledby="transition-title">
+            <div class="modal-header">
+                <div class="modal-title" id="transition-title">Change Status</div>
+                <button class="btn btn-ghost btn-sm btn-icon" @onclick="CloseTransitionModal">✕</button>
+            </div>
+            <div class="modal-body">
+                <p class="text-dim" style="margin-bottom:16px;">
+                    Task: <strong style="color:var(--text);">@_transitionTask.Title</strong>
+                </p>
+                <p class="text-dim" style="margin-bottom:12px;font-size:12px;">
+                    Current: <span class="badge @StatusBadge(_transitionTask.Status)">@_transitionTask.Status</span>
+                </p>
+                @if (_transitionError is not null)
+                {
+                    <div class="alert alert-danger">⚠️ @_transitionError</div>
+                }
+                <div style="display:flex;flex-direction:column;gap:8px;">
+                    @foreach (var transition in GetAvailableTransitions(_transitionTask.Status))
+                    {
+                        <button class="btn @TransitionBtnClass(transition.To) w-full"
+                                @onclick="() => ApplyTransitionAsync(transition.To)">
+                            @TransitionIcon(transition.To) @transition.Label
+                            <span style="font-size:11px;opacity:.7;margin-left:4px;">— @transition.Description</span>
+                        </button>
+                    }
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-ghost" @onclick="CloseTransitionModal">Cancel</button>
+            </div>
+        </div>
+    </div>
+}
+
+<!-- Delete confirmation modal -->
+@if (_showDeleteModal && _deleteTarget is not null)
+{
+    <div class="modal-backdrop" @onclick="CloseDeleteModal">
+        <div class="modal" style="max-width:400px;" @onclick:stopPropagation="true"
+             role="dialog" aria-modal="true" aria-labelledby="delete-title">
+            <div class="modal-header">
+                <div class="modal-title" id="delete-title" style="color:var(--danger);">🗑️ Delete Task</div>
+                <button class="btn btn-ghost btn-sm btn-icon" @onclick="CloseDeleteModal">✕</button>
+            </div>
+            <div class="modal-body">
+                <p class="text-dim">
+                    Are you sure you want to delete
+                    <strong style="color:var(--text);">@_deleteTarget.Title</strong>?
+                    This action cannot be undone.
+                </p>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-ghost" @onclick="CloseDeleteModal">Cancel</button>
+                <button class="btn btn-danger" @onclick="DeleteAsync" disabled="@_saving">
+                    @if (_saving) { <span class="spinner" style="width:14px;height:14px;border-width:2px;"></span> }
+                    Yes, Delete
+                </button>
+            </div>
+        </div>
+    </div>
+}
+
+<!-- Reason modal -->
+@if (_showReasonModal && _transitionTask is not null)
+{
+    <div class="modal-backdrop" @onclick="() => _showReasonModal = false">
+        <div class="modal" style="max-width:420px;" @onclick:stopPropagation="true"
+             role="dialog" aria-modal="true">
+            <div class="modal-header">
+                <div class="modal-title">Reason Required</div>
+                <button class="btn btn-ghost btn-sm btn-icon" @onclick="() => _showReasonModal = false">✕</button>
+            </div>
+            <div class="modal-body">
+                <p class="text-dim" style="margin-bottom:12px;">
+                    Moving <strong style="color:var(--text);">@_transitionTask.Title</strong>
+                    to <span class="badge @StatusBadge(_pendingStatus)">@_pendingStatus</span>
+                </p>
+                @if (StateMachine.IsFastClose(_transitionTask.Status, _pendingStatus))
+                {
+                    <div class="alert alert-danger" style="margin-bottom:12px;">
+                        ⚡ This task will be marked as <strong>fast-closed</strong> — it skipped the normal workflow.
+                    </div>
+                }
+                @if (_reasonError is not null)
+                {
+                    <div class="alert alert-danger">⚠️ @_reasonError</div>
+                }
+                <div class="form-group">
+                    <label class="form-label">Select a reason *</label>
+                    <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:12px;">
+                        @foreach (var reason in CloseReasons)
+                        {
+                            <button class="btn @(_reasonInput == reason ? "btn-primary" : "btn-ghost") w-full"
+                                    style="justify-content:flex-start;"
+                                    @onclick="() => { _reasonInput = reason; _reasonError = null; }">
+                                @reason
+                            </button>
+                        }
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-ghost" @onclick="() => _showReasonModal = false">Cancel</button>
+                <button class="btn btn-primary" @onclick="ConfirmReasonAsync"
+                        disabled="@string.IsNullOrEmpty(_reasonInput)">
+                    Confirm
+                </button>
+            </div>
+        </div>
+    </div>
+}
+
+<style>
+    .overdue-row td { background: rgba(239, 68, 68, 0.04); }
+
+    .view-toggle {
+        display: flex;
+        background: var(--bg-card);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        overflow: hidden;
+    }
+
+    .view-toggle-btn {
+        padding: 7px 14px;
+        font-size: 12.5px;
+        font-weight: 500;
+        background: transparent;
+        border: none;
+        color: var(--text-muted);
+        cursor: pointer;
+        transition: background .15s, color .15s;
+        white-space: nowrap;
+    }
+
+    .view-toggle-btn:hover  { background: var(--bg-hover); color: var(--text); }
+    .view-toggle-btn.active { background: var(--accent); color: #fff; }
+
+    .drag-hint {
+        text-align: center;
+        font-size: 12px;
+        color: var(--accent);
+        background: rgba(108,99,255,.08);
+        border: 1px dashed var(--accent);
+        border-radius: var(--radius-sm);
+        padding: 8px;
+        margin-bottom: 12px;
+    }
+
+    .kanban-board {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 16px;
+        align-items: start;
+    }
+
+    .kanban-column {
+        background: var(--bg-card);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        display: flex;
+        flex-direction: column;
+        min-height: 200px;
+        transition: border-color .2s, background .2s;
+    }
+
+    .kanban-drop-target {
+        border-color: var(--accent) !important;
+        background: rgba(108,99,255,.06) !important;
+    }
+
+    .kanban-column-header {
+        padding: 12px 14px;
+        border-bottom: 1px solid var(--border);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+    }
+
+    .kanban-count {
+        font-size: 11px;
+        font-weight: 700;
+        background: var(--bg-hover);
+        color: var(--text-muted);
+        padding: 1px 7px;
+        border-radius: 20px;
+    }
+
+    .kanban-cards {
+        padding: 10px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        flex: 1;
+        min-height: 60px;
+    }
+
+    .kanban-empty {
+        text-align: center;
+        padding: 24px 12px;
+        font-size: 12px;
+        color: var(--text-muted);
+        border: 1px dashed var(--border);
+        border-radius: var(--radius-sm);
+        transition: border-color .2s, color .2s;
+    }
+
+    .kanban-empty-active {
+        border-color: var(--accent) !important;
+        color: var(--accent) !important;
+    }
+
+    .kanban-card {
+        background: var(--bg);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        overflow: hidden;
+        transition: border-color .15s, transform .1s, opacity .15s;
+        cursor: grab;
+        user-select: none;
+    }
+
+    .kanban-card:hover       { border-color: var(--accent); transform: translateY(-1px); }
+    .kanban-card:active      { cursor: grabbing; }
+    .kanban-card-overdue     { border-color: rgba(239, 68, 68, 0.4) !important; }
+
+    .kanban-card-dragging {
+        opacity: 0.4;
+        transform: scale(0.98);
+        cursor: grabbing;
+    }
+
+    .kanban-card-priority            { height: 3px; width: 100%; }
+    .kanban-card-priority.badge-low      { background: #64748b; }
+    .kanban-card-priority.badge-medium   { background: #f59e0b; }
+    .kanban-card-priority.badge-high     { background: #f97316; }
+    .kanban-card-priority.badge-critical { background: #ef4444; }
+
+    .kanban-card-body  { padding: 10px 12px; }
+
+    .kanban-card-title {
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--text);
+        margin-bottom: 4px;
+        line-height: 1.4;
+    }
+
+    .kanban-card-desc {
+        font-size: 11.5px;
+        color: var(--text-muted);
+        margin-bottom: 8px;
+        line-height: 1.4;
+    }
+
+    .kanban-card-meta {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 8px;
+        flex-wrap: wrap;
+    }
+
+    .kanban-card-footer {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-top: 6px;
+    }
+
+    .kanban-avatar {
+        width: 26px; height: 26px;
+        border-radius: 50%;
+        background: var(--accent);
+        color: #fff;
+        font-size: 10px;
+        font-weight: 700;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+    }
+
+    @@media (max-width: 1100px) { .kanban-board { grid-template-columns: repeat(2, 1fr); } }
+    @@media (max-width: 600px)  { .kanban-board { grid-template-columns: 1fr; } }
+
+    /* Subtasks */
+    .subtask-toggle {
+        background: transparent;
+        border: none;
+        color: var(--text-muted);
+        cursor: pointer;
+        font-size: 14px;
+        padding: 2px 4px;
+        border-radius: 4px;
+        transition: color .15s;
+        flex-shrink: 0;
+    }
+
+    .subtask-toggle:hover    { color: var(--accent); }
+    .subtask-toggle.expanded { color: var(--accent); }
+
+    .subtask-panel-row td {
+        background: var(--bg);
+        padding: 0 !important;
+    }
+
+    .subtask-panel {
+        padding: 10px 16px 10px 48px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        border-top: 1px solid var(--border);
+    }
+
+    .kanban-subtask-panel {
+        padding: 8px 0 4px 0;
+        border-top: 1px solid var(--border);
+        margin-top: 8px;
+    }
+
+    .subtask-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 4px 0;
+    }
+
+    .subtask-status-btn {
+        width: 20px;
+        height: 20px;
+        border-radius: 50%;
+        border: 1px solid var(--border);
+        background: transparent;
+        color: var(--text-muted);
+        font-size: 11px;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+        transition: background .15s, color .15s;
+    }
+
+    .subtask-status-btn:hover            { background: var(--accent); color: #fff; border-color: var(--accent); }
+    .subtask-status-btn.badge-done       { background: var(--success); color: #fff; border-color: var(--success); }
+    .subtask-status-btn.badge-inprogress { border-color: var(--accent); color: var(--accent); }
+    .subtask-status-btn.badge-blocked    { border-color: var(--danger); color: var(--danger); }
+
+    .subtask-title      { flex: 1; font-size: 12.5px; color: var(--text); }
+    .subtask-title.done { text-decoration: line-through; color: var(--text-muted); }
+
+    .subtask-delete                    { opacity: 0; transition: opacity .15s; }
+    .subtask-row:hover .subtask-delete { opacity: 1; }
+
+    .subtask-add-row { display: flex; gap: 8px; margin-top: 4px; }
+
+    .subtask-input {
+        flex: 1;
+        height: 32px;
+        font-size: 12.5px;
+        padding: 4px 10px;
+    }
+
+    /* ── Subtasks ─────────────────────────────────── */
+    .subtask-toggle {
+        background: transparent;
+        border: none;
+        color: var(--text-muted);
+        cursor: pointer;
+        font-size: 14px;
+        padding: 2px 4px;
+        border-radius: 4px;
+        transition: color .15s;
+        flex-shrink: 0;
+    }
+
+    .subtask-toggle:hover  { color: var(--accent); }
+    .subtask-toggle.expanded { color: var(--accent); }
+
+    .subtask-panel-row td {
+        background: var(--bg);
+        padding: 0 !important;
+    }
+
+    .subtask-panel {
+        padding: 10px 16px 10px 48px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        border-top: 1px solid var(--border);
+    }
+
+    .kanban-subtask-panel {
+        padding: 8px 0 4px 0;
+        border-top: 1px solid var(--border);
+        margin-top: 8px;
+    }
+
+    .subtask-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 4px 0;
+    }
+
+    .subtask-status-btn {
+        width: 20px;
+        height: 20px;
+        border-radius: 50%;
+        border: 1px solid var(--border);
+        background: transparent;
+        color: var(--text-muted);
+        font-size: 11px;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+        transition: background .15s, color .15s;
+    }
+
+    .subtask-status-btn:hover { background: var(--accent); color: #fff; border-color: var(--accent); }
+    .subtask-status-btn.badge-done { background: var(--success); color: #fff; border-color: var(--success); }
+    .subtask-status-btn.badge-inprogress { border-color: var(--accent); color: var(--accent); }
+    .subtask-status-btn.badge-blocked { border-color: var(--danger); color: var(--danger); }
+
+    .subtask-title {
+        flex: 1;
+        font-size: 12.5px;
+        color: var(--text);
+    }
+
+    .subtask-title.done {
+        text-decoration: line-through;
+        color: var(--text-muted);
+    }
+
+    .subtask-delete { opacity: 0; transition: opacity .15s; }
+    .subtask-row:hover .subtask-delete { opacity: 1; }
+
+    .subtask-add-row {
+        display: flex;
+        gap: 8px;
+        margin-top: 4px;
+    }
+
+    .subtask-input {
+        flex: 1;
+        height: 32px;
+        font-size: 12.5px;
+        padding: 4px 10px;
+    }
+</style>
+
+@code {
+    // State
+    private bool    _loading  = true;
+    private bool    _saving   = false;
+    private bool    _isError  = false;
+    private string  _viewMode = "table";
+    private string? _message;
+
+    private string?       _search           = null;
+    private int?          _filterProjectId  = null;
+    private TaskStatus?   _filterStatus     = null;
+    private TaskPriority? _filterPriority   = null;
+    private int?          _filterAssigneeId = null;
+    private string?       _sortBy           = null;
+
+    private bool     _showModal = false;
+    private int?     _editId    = null;
+    private string?  _formError = null;
+    private TaskForm _form      = new();
+
+    private bool      _showTransitionModal = false;
+    private TaskItem? _transitionTask      = null;
+    private string?   _transitionError     = null;
+
+    private bool      _showDeleteModal = false;
+    private TaskItem? _deleteTarget    = null;
+
+    // Drag & Drop
+    private bool        _dragging       = false;
+    private int?        _draggingTaskId = null;
+    private TaskStatus? _dragOverStatus = null;
+    private TaskItem?   _draggingTask   = null;
+
+    // Pagination
+    private PagedResult<TaskItem> _result = new(new(), 0, 1, 15);
+    private List<TaskItem> _tasks => _result.Items;
+    private int _page = 1;
+    private const int PageSize = 15;
+
+    private List<Project>    _projects = new();
+    private List<TeamMember> _members  = new();
+
+    // Subtask state
+    private HashSet<int>                    _expandedTasks   = new();
+    private Dictionary<int, List<TaskItem>> _subTasks        = new();
+    private Dictionary<int, string>         _newSubTaskTitle = new();
+    private Dictionary<int, bool>           _savingSubTask   = new();
+
+    // Lifecycle
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadRefsAsync();
+        await LoadAsync();
+    }
+
+    /// <summary>Loads projects and members for filter dropdowns and forms.</summary>
+    private async Task LoadRefsAsync()
+    {
+        var projectResult = await ProjectService.ListAsync(includeArchived: false, pageSize: 1000);
+        _projects = projectResult.Items;
+
+        var memberResult = await MemberService.ListAsync(onlyActive: false, pageSize: 1000);
+        _members = memberResult.Items;
+    }
+
+    /// <summary>Reloads the task list applying all active filters and pagination.</summary>
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _result = await TaskService.ListAsync(
+            projectId:  _filterProjectId,
+            status:     _filterStatus,
+            priority:   _filterPriority,
+            assigneeId: _filterAssigneeId,
+            search:     _search,
+            sortBy:     _sortBy,
+            page:       _page,
+            pageSize:   PageSize);
+        _loading = false;
+    }
+
+    /// <summary>Resets to page 1 and reloads when any filter changes.</summary>
+    private async Task FilterChangedAsync() { _page = 1; await LoadAsync(); }
+
+    private async Task GoToPageAsync(int page) { _page = page; await LoadAsync(); }
+
+    /// <summary>Switches view mode and reloads tasks.</summary>
+    private async Task SetViewMode(string mode) { _viewMode = mode; await LoadAsync(); }
+
+    // Subtask handlers
+
+    /// <summary>
+    /// Toggles the subtask panel. Loads from server on first expand.
+    /// </summary>
+    private async Task ToggleSubTasksAsync(TaskItem task)
+    {
+        if (_expandedTasks.Contains(task.Id))
+        {
+            _expandedTasks.Remove(task.Id);
+            return;
+        }
+
+        _expandedTasks.Add(task.Id);
+
+        if (!_subTasks.ContainsKey(task.Id))
+            _subTasks[task.Id] = await TaskService.GetSubTasksAsync(task.Id);
+
+        if (!_newSubTaskTitle.ContainsKey(task.Id))
+            _newSubTaskTitle[task.Id] = "";
+    }
+
+    /// <summary>Creates a subtask inline and refreshes the list.</summary>
+    private async Task AddSubTaskAsync(TaskItem parent)
+    {
+        var title = _newSubTaskTitle.GetValueOrDefault(parent.Id, "").Trim();
+        if (string.IsNullOrEmpty(title)) return;
+
+        _savingSubTask[parent.Id] = true;
+
+        await TaskService.CreateSubTaskAsync(parent.Id, new TaskItem
+        {
+            Title    = title,
+            Priority = TaskPriority.Medium,
+        });
+
+        _newSubTaskTitle[parent.Id] = "";
+        _subTasks[parent.Id]        = await TaskService.GetSubTasksAsync(parent.Id);
+        _savingSubTask[parent.Id]   = false;
+
+        await LoadAsync();
+    }
+
+    /// <summary>Cycles subtask status: Backlog -> InProgress -> Done -> Backlog.</summary>
+    private async Task CycleSubTaskStatusAsync(TaskItem subTask, int parentId)
+    {
+        var next = subTask.Status switch
+        {
+            TaskStatus.Backlog    => TaskStatus.InProgress,
+            TaskStatus.InProgress => TaskStatus.Done,
+            _                     => TaskStatus.Backlog
+        };
+
+        await TaskService.ChangeStatusAsync(subTask.Id, next);
+        _subTasks[parentId] = await TaskService.GetSubTasksAsync(parentId);
+        await LoadAsync();
+    }
+
+    /// <summary>Deletes a subtask and refreshes the parent list.</summary>
+    private async Task DeleteSubTaskAsync(int subTaskId, int parentId)
+    {
+        await TaskService.DeleteSubTaskAsync(subTaskId);
+        _subTasks[parentId] = await TaskService.GetSubTasksAsync(parentId);
+        await LoadAsync();
+    }
+
+    /// <summary>Returns "done/total" progress string for a task's subtasks.</summary>
+    private string SubTaskProgress(TaskItem task)
+    {
+        if (!task.SubTasks.Any()) return "";
+        var done = task.SubTasks.Count(s => s.Status == TaskStatus.Done);
+        return $"{done}/{task.SubTasks.Count}";
+    }
+
+    /// <summary>Returns badge CSS class based on subtask completion ratio.</summary>
+    private string SubTaskBadgeClass(TaskItem task)
+    {
+        if (!task.SubTasks.Any()) return "badge-backlog";
+        var done = task.SubTasks.Count(s => s.Status == TaskStatus.Done);
+        if (done == task.SubTasks.Count) return "badge-done";
+        if (done > 0) return "badge-inprogress";
+        return "badge-backlog";
+    }
+
+    private void OnSubTaskInput(ChangeEventArgs e, int taskId)
+    {
+        _newSubTaskTitle[taskId] = e.Value?.ToString() ?? string.Empty;
+    }
+
+    private static string GetSubTaskToggleTitle(bool expanded) =>
+    expanded ? "Hide subtasks" : "Show subtasks";
+
+    // Drag & Drop
+
+    private void OnDragStart(TaskItem task)
+    {
+        _dragging       = true;
+        _draggingTask   = task;
+        _draggingTaskId = task.Id;
+    }
+
+    private void OnDragEnter(TaskStatus status) => _dragOverStatus = status;
+    private void OnDragLeave() { }
+
+    private async Task OnDrop(TaskStatus targetStatus)
+    {
+        _dragOverStatus = null;
+        _dragging       = false;
+
+        if (_draggingTask is null) return;
+        if (_draggingTask.Status == targetStatus)
+        {
+            _draggingTask   = null;
+            _draggingTaskId = null;
+            return;
+        }
+
+        // Check if reason required — can't do optimistic for these via DnD
+        if (StateMachine.RequiresReason(_draggingTask.Status, targetStatus))
+        {
+            _transitionTask  = _draggingTask;
+            _pendingStatus   = targetStatus;
+            _reasonInput     = null;
+            _reasonError     = null;
+            _showReasonModal = true;
+            _draggingTask    = null;
+            _draggingTaskId  = null;
+            return;
+        }
+
+        // Optimistic update
+        var task      = _draggingTask;
+        var oldStatus = task.Status;
+        task.Status   = targetStatus;
+
+        _draggingTask   = null;
+        _draggingTaskId = null;
+        StateHasChanged();
+
+        var (ok, err) = await TaskService.ChangeStatusAsync(task.Id, targetStatus, null);
+
+        if (ok)
+        {
+             ShowToastAsync($"Moved to {targetStatus}.", isError: false);
+        }
+        else
+        {
+            // Revert on failure
+            task.Status = oldStatus;
+             ShowToastAsync($"⚠️ {err}", isError: true);
+        }
+    }
+
+    private void OnDragEnd()
+    {
+        _dragging       = false;
+        _draggingTaskId = null;
+        _draggingTask   = null;
+        _dragOverStatus = null;
+    }
+
+    // Create / Edit modal
+
+    private void OpenCreate()
+    {
+        _form      = new();
+        _editId    = null;
+        _formError = null;
+        _showModal = true;
+    }
+
+    private void OpenCreateWithStatus(TaskStatus status)
+    {
+        _form      = new TaskForm { Priority = TaskPriority.Medium };
+        _editId    = null;
+        _formError = null;
+        _showModal = true;
+    }
+
+    private void OpenEdit(TaskItem t)
+    {
+        _form = new TaskForm
+        {
+            Title          = t.Title,
+            Description    = t.Description,
+            Priority       = t.Priority,
+            ProjectId      = t.ProjectId,
+            AssigneeId     = t.AssigneeId,
+            DueDate        = t.DueDate.HasValue
+                                ? DateOnly.FromDateTime(t.DueDate.Value.ToLocalTime())
+                                : null,
+            EstimatedHours = t.EstimatedHours,
+            ActualHours    = t.ActualHours
+        };
+        _editId    = t.Id;
+        _formError = null;
+        _showModal = true;
+    }
+
+    private void CloseModal() => _showModal = false;
+
+private async Task SaveAsync()
+{
+    _saving    = true;
+    _formError = null;
+
+    var task = new TaskItem
+    {
+        Id             = _editId ?? 0,
+        Title          = _form.Title.Trim(),
+        Description    = string.IsNullOrWhiteSpace(_form.Description) ? null : _form.Description.Trim(),
+        Priority       = _form.Priority,
+        ProjectId      = _form.ProjectId,
+        AssigneeId     = _form.AssigneeId,
+        DueDate        = _form.DueDate.HasValue
+                            ? DateTime.SpecifyKind(
+                                _form.DueDate.Value.ToDateTime(TimeOnly.MinValue),
+                                DateTimeKind.Local).ToUniversalTime()
+                            : null,
+        EstimatedHours = _form.EstimatedHours,
+        ActualHours    = _form.ActualHours
+    };
+
+    if (_editId is null)
+    {
+        await TaskService.CreateAsync(task);
+         ShowToastAsync("Task created successfully.", isError: false);
+        _saving    = false;
+        _showModal = false;
+        await LoadAsync();
+    }
+    else
+    {
+        try
+        {
+            var result = await TaskService.UpdateAsync(task);
+            if (result is null)
+            {
+                _formError = "Task not found. It may have been deleted.";
+                _saving = false;
+                return;
+            }
+
+            // Optimistic update — reflect changes in memory immediately
+            var existing = _tasks.FirstOrDefault(t => t.Id == _editId);
+            if (existing is not null)
+            {
+                existing.Title          = task.Title;
+                existing.Description    = task.Description;
+                existing.Priority       = task.Priority;
+                existing.ProjectId      = task.ProjectId;
+                existing.Project        = _projects.FirstOrDefault(p => p.Id == task.ProjectId);
+                existing.AssigneeId     = task.AssigneeId;
+                existing.Assignee       = _members.FirstOrDefault(m => m.Id == task.AssigneeId);
+                existing.DueDate        = task.DueDate;
+                existing.EstimatedHours = task.EstimatedHours;
+                existing.ActualHours    = task.ActualHours;
+            }
+
+             ShowToastAsync("Task updated successfully.", isError: false);
+        }
+        catch (InvalidOperationException ex)
+        {
+            _formError = ex.Message;
+            _saving = false;
+            return;
+        }
+
+        _saving    = false;
+        _showModal = false;
+    }
+}
+    // Status transition modal
+
+    private void OpenTransition(TaskItem t)
+    {
+        _transitionTask      = t;
+        _transitionError     = null;
+        _showTransitionModal = true;
+    }
+
+    private void CloseTransitionModal()
+    {
+        _showTransitionModal = false;
+        _transitionTask      = null;
+        _transitionError     = null;
+    }
+
+private async Task ApplyTransitionAsync(TaskStatus newStatus)
+{
+    if (_transitionTask is null) return;
+
+    if (StateMachine.RequiresReason(_transitionTask.Status, newStatus))
+    {
+        _pendingStatus   = newStatus;
+        _reasonInput     = null;
+        _reasonError     = null;
+        _showReasonModal = true;
+        return;
+    }
+
+    await ExecuteTransitionAsync(newStatus, null);
+}
+
+    private async Task ExecuteTransitionAsync(TaskStatus newStatus, string? reason)
+    {
+        if (_transitionTask is null) return;
+
+        // Optimistic update — change status in memory immediately
+        var task        = _transitionTask;
+        var oldStatus   = task.Status;
+        task.Status     = newStatus;
+
+        if (StateMachine.IsFastClose(oldStatus, newStatus))
+        {
+            task.IsFastClosed = true;
+            task.CloseReason  = reason;
+        }
+        if (newStatus == TaskStatus.Backlog)
+        {
+            task.IsFastClosed = false;
+            task.CloseReason  = null;
+        }
+
+        CloseTransitionModal();
+        StateHasChanged();
+
+        // Sync with server in background
+        var (ok, err) = await TaskService.ChangeStatusAsync(task.Id, newStatus, reason);
+
+        if (ok)
+        {
+             ShowToastAsync($"Status updated to {newStatus}.", isError: false);
+        }
+        else
+        {
+            // Revert on failure
+            task.Status       = oldStatus;
+            task.IsFastClosed = false;
+            task.CloseReason  = null;
+             ShowToastAsync($"⚠️ {err}", isError: true);
+        }
+    }
+
+    private async Task ConfirmReasonAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_reasonInput))
+        {
+            _reasonError = "Please select or enter a reason.";
+            return;
+        }
+
+        var reason = _reasonInput;
+        _showReasonModal = false;
+        await ExecuteTransitionAsync(_pendingStatus, reason);
+    }
+
+    // Delete modal
+
+    private void ConfirmDelete(TaskItem t) { _deleteTarget = t; _showDeleteModal = true; }
+    private void CloseDeleteModal()        { _showDeleteModal = false; _deleteTarget = null; }
+
+    private async Task DeleteAsync()
+    {
+        if (_deleteTarget is null) return;
+        _saving = true;
+        await TaskService.DeleteAsync(_deleteTarget.Id);
+        _saving = false;
+        CloseDeleteModal();
+         ShowToastAsync("Task deleted.", isError: false);
+        await LoadAsync();
+    }
+
+    // Helpers
+
+    private IReadOnlyList<StateTransition> GetAvailableTransitions(TaskStatus current)
+        => StateMachine.GetAvailableTransitions(current);
+
+    private static string TransitionBtnClass(TaskStatus to) => to switch
+    {
+        TaskStatus.Done       => "btn-success",
+        TaskStatus.Blocked    => "btn-danger",
+        TaskStatus.InProgress => "btn-primary",
+        TaskStatus.Backlog    => "btn-ghost",
+        _                     => "btn-ghost"
+    };
+
+    private static string TransitionIcon(TaskStatus to) => to switch
+    {
+        TaskStatus.Done       => "✅",
+        TaskStatus.Blocked    => "🚧",
+        TaskStatus.InProgress => "▶️",
+        TaskStatus.Backlog    => "🔄",
+        _                     => ""
+    };
+
+    private static bool IsOverdue(TaskItem t) =>
+        t.Status != TaskStatus.Done &&
+        t.DueDate.HasValue &&
+        t.DueDate.Value < DateTime.UtcNow;
+
+    private static string Truncate(string? text, int max) =>
+        string.IsNullOrEmpty(text) ? "" :
+        text.Length <= max ? text : text[..max] + "...";
+
+    private static string GetInitials(string fullName)
+    {
+        var parts = fullName.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return parts.Length switch
+        {
+            0 => "?",
+            1 => parts[0][..1].ToUpper(),
+            _ => $"{parts[0][0]}{parts[^1][0]}".ToUpper()
+        };
+    }
+
+    private static string StatusBadge(TaskStatus s) => s switch
+    {
+        TaskStatus.Backlog    => "badge-backlog",
+        TaskStatus.InProgress => "badge-inprogress",
+        TaskStatus.Blocked    => "badge-blocked",
+        TaskStatus.Done       => "badge-done",
+        _                     => ""
+    };
+
+    private static string PriorityBadge(TaskPriority p) => p switch
+    {
+        TaskPriority.Low      => "badge-low",
+        TaskPriority.Medium   => "badge-medium",
+        TaskPriority.High     => "badge-high",
+        TaskPriority.Critical => "badge-critical",
+        _                     => ""
+    };
+
+    private void ShowToastAsync(string message, bool isError)
+    {
+        _message = message;
+        _isError = isError;
+        StateHasChanged();
+        _ = Task.Delay(3000).ContinueWith(_ =>
+        {
+            _message = null;
+            InvokeAsync(StateHasChanged);
+        });
+    }
+
+    /// <summary>Handles Enter key press in the subtask input to trigger save.</summary>
+    private async Task OnSubTaskKeyDown(KeyboardEventArgs e, TaskItem parent)
+    {
+        if (e.Key == "Enter") await AddSubTaskAsync(parent);
+    }
+
+    // Form model
+
+    private class TaskForm
+    {
+        [System.ComponentModel.DataAnnotations.Required(ErrorMessage = "Title is required.")]
+        [System.ComponentModel.DataAnnotations.MaxLength(120, ErrorMessage = "Title cannot exceed 120 characters.")]
+        public string Title { get; set; } = "";
+
+        [System.ComponentModel.DataAnnotations.MaxLength(2000, ErrorMessage = "Description cannot exceed 2000 characters.")]
+        public string? Description { get; set; }
+
+        public TaskPriority Priority { get; set; } = TaskPriority.Medium;
+
+        [System.ComponentModel.DataAnnotations.Range(1, int.MaxValue, ErrorMessage = "Please select a project.")]
+        public int ProjectId { get; set; } = 0;
+
+        public int?      AssigneeId { get; set; }
+        public DateOnly? DueDate    { get; set; }
+
+        [System.ComponentModel.DataAnnotations.Range(0.1, 9999, ErrorMessage = "Estimated hours must be between 0.1 and 9999.")]
+        public decimal? EstimatedHours { get; set; }
+
+        [System.ComponentModel.DataAnnotations.Range(0.1, 9999, ErrorMessage = "Actual hours must be between 0.1 and 9999.")]
+        public decimal? ActualHours { get; set; }
+    }
+    // Close reason modal state
+        private bool    _showReasonModal  = false;
+        private TaskStatus _pendingStatus;
+        private string? _reasonInput      = null;
+        private string? _reasonError      = null;
+        private static readonly string[] CloseReasons =
+            { "Duplicate", "Won't Fix", "Out of Scope", "No Longer Needed", "Other" };
+
+        private bool IsEditingDone     => _editId.HasValue && _tasks.FirstOrDefault(t => t.Id == _editId)?.Status == TaskStatus.Done;
+        private bool IsEditingBlocked  => _editId.HasValue && _tasks.FirstOrDefault(t => t.Id == _editId)?.Status == TaskStatus.Blocked;
+}

@@ -1,0 +1,79 @@
+@inherits LayoutComponentBase
+@inject IJSRuntime JS
+
+
+
+<div class="app-layout">
+    <div class="sidebar-overlay @(_sidebarOpen ? "" : "d-none")"
+        @onclick="CloseSidebar"></div>
+    <nav class="sidebar @(_sidebarOpen ? "open" : "")" id="sidebar">
+        <div class="sidebar-logo">
+            <div class="logo-icon">⚡</div>
+            <div class="logo-text">Task<span>Flow</span> Pro</div>
+        </div>
+        <div class="sidebar-nav">
+            <div class="nav-section-label">Main</div>
+            <NavLink class="nav-item" href="/" Match="NavLinkMatch.All" @onclick="CloseSidebar">
+                <span class="nav-icon">📊</span> Dashboard
+            </NavLink>
+            <NavLink class="nav-item" href="/tasks" @onclick="CloseSidebar">
+                <span class="nav-icon">✅</span> Tasks
+            </NavLink>
+            <div class="nav-section-label">Manage</div>
+            <NavLink class="nav-item" href="/projects" @onclick="CloseSidebar">
+                <span class="nav-icon">📁</span> Projects
+            </NavLink>
+            <NavLink class="nav-item" href="/members" @onclick="CloseSidebar">
+                <span class="nav-icon">👥</span> Team Members
+            </NavLink>
+            <div class="nav-section-label">System</div>
+            <NavLink class="nav-item" href="/activity" @onclick="CloseSidebar">
+                <span class="nav-icon">📋</span> Activity Log
+            </NavLink>
+        </div>
+    </nav>
+
+    <div class="main-content">
+        <header class="topbar">
+            <button class="hamburger" @onclick="ToggleSidebar" aria-label="Toggle menu">☰</button>
+            <div class="topbar-title">TaskFlow Pro</div>
+        </header>
+        <main class="page-body">
+            @Body
+        </main>
+    </div>
+</div>
+
+<script>
+    (function() {
+        let startX = 0;
+        let startY = 0;
+
+        document.addEventListener('touchstart', e => {
+            startX = e.touches[0].clientX;
+            startY = e.touches[0].clientY;
+        }, { passive: true });
+
+        document.addEventListener('touchend', e => {
+            const dx = e.changedTouches[0].clientX - startX;
+            const dy = e.changedTouches[0].clientY - startY;
+
+            if (dx < -50 && Math.abs(dy) < Math.abs(dx)) {
+                const overlay = document.querySelector('.sidebar-overlay');
+                if (overlay) overlay.click();
+            }
+        }, { passive: true });
+    })();
+</script>
+
+@code {
+    private bool _sidebarOpen = false;
+
+    private void ToggleSidebar() => _sidebarOpen = !_sidebarOpen;
+    private void CloseSidebar()
+    {
+        Console.WriteLine("[Sidebar] CloseSidebar called");
+        _sidebarOpen = false;
+        StateHasChanged();
+    }
+}

@@ -1,0 +1,302 @@
+@page "/activity"
+@using Microsoft.EntityFrameworkCore
+@inject AppDbContext Db
+
+<PageTitle>Activity Log – TaskFlow Pro</PageTitle>
+
+<div class="flex justify-between items-center mb-6">
+    <div>
+        <h1 style="font-size:22px;font-weight:700;margin-bottom:4px;">Activity Log</h1>
+        <p class="text-muted">Audit trail of all changes across tasks, projects, and team members</p>
+    </div>
+</div>
+
+<div class="filters-bar mb-4">
+    <select class="form-control" @bind="_filterEntityType" @bind:after="FilterChangedAsync" aria-label="Filter by entity">
+        <option value="">All Entities</option>
+        <option value="Task">Tasks</option>
+        <option value="Project">Projects</option>
+        <option value="TeamMember">Team Members</option>
+    </select>
+
+    <select class="form-control" @bind="_filterAction" @bind:after="FilterChangedAsync" aria-label="Filter by action">
+        <option value="">All Actions</option>
+        @foreach (var action in GetAvailableActions())
+        {
+            <option value="@action.Value">@action.Label</option>
+        }
+    </select>
+
+        <input class="form-control search-input"
+            type="search"
+            placeholder="🔍 Search in details..."
+            @bind="_search"
+            @bind:event="oninput"
+            @bind:after="FilterChangedAsync"
+            aria-label="Search activity log" />
+    </div>
+
+@if (_loading)
+{
+    <div class="empty-state"><div class="spinner"></div></div>
+}
+else if (_logs.Count == 0)
+{
+    <div class="card">
+        <div class="empty-state">
+            <div class="empty-icon">📋</div>
+            <div class="empty-title">No activity yet</div>
+            <div class="empty-sub">Events will appear here as changes are made</div>
+        </div>
+    </div>
+}
+else
+{
+    <div class="card">
+        <div class="table-wrap">
+            <table class="tf-table">
+                <thead>
+                    <tr>
+                        <th>Event</th>
+                        <th>Entity</th>
+                        <th>Name</th>
+                        <th>Details</th>
+                        <th>Actor</th>
+                        <th>Date</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var log in _logs)
+                    {
+                        <tr>
+                            <td>
+                                <span class="badge @ActionBadge(log.Action)">
+                                    @ActionIcon(log.Action) @ActionLabel(log.Action)
+                                </span>
+                            </td>
+                            <td>
+                                <span class="badge @EntityBadge(log.EntityType)" style="font-size:10px;">
+                                    @EntityIcon(log.EntityType) @log.EntityType
+                                </span>
+                            </td>
+                            <td style="color:var(--text);font-weight:500;font-size:13px;">
+                                @GetEntityName(log)
+                            </td>
+                            <td class="text-dim" style="font-size:12.5px;">@log.Details</td>
+                            <td>
+                                <span class="badge badge-inprogress">@log.Actor</span>
+                            </td>
+                            <td class="text-dim" style="font-size:12.5px;white-space:nowrap;">
+                                @log.OccurredAtUtc.ToLocalTime().ToString("MMM dd, yyyy HH:mm")
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+        <Pagination T="ActivityLog" Result="_result" OnPageChange="GoToPageAsync" />
+    </div>
+}
+
+@code {
+    private bool    _loading           = true;
+    private string? _filterEntityType  = null;
+    private string? _filterAction      = null;
+    private string? _search            = null;
+    private int     _page              = 1;
+    private const int PageSize         = 20;
+
+    private PagedResult<ActivityLog>  _result = new(new(), 0, 1, 20);
+    private List<ActivityLog>         _logs   => _result.Items;
+
+    private Dictionary<int, string> _taskTitles   = new();
+    private Dictionary<int, string> _projectNames = new();
+    private Dictionary<int, string> _memberNames  = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadNamesAsync();
+        await LoadAsync();
+    }
+
+    /// <summary>Pre-loads entity names so the table shows meaningful labels.</summary>
+    private async Task LoadNamesAsync()
+    {
+        _taskTitles   = await Db.Tasks.AsNoTracking().ToDictionaryAsync(x => x.Id, x => x.Title);
+        _projectNames = await Db.Projects.AsNoTracking().ToDictionaryAsync(x => x.Id, x => x.Name);
+        _memberNames  = await Db.TeamMembers.AsNoTracking().ToDictionaryAsync(x => x.Id, x => x.FullName);
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+
+        var query = Db.ActivityLogs.AsNoTracking().AsQueryable();
+
+        if (!string.IsNullOrEmpty(_filterEntityType))
+            query = query.Where(x => x.EntityType == _filterEntityType);
+
+        if (!string.IsNullOrEmpty(_filterAction))
+            query = query.Where(x => x.Action == _filterAction);
+
+        if (!string.IsNullOrWhiteSpace(_search))
+        {
+            var term = _search.Trim().ToLower();
+            query = query.Where(x => x.Details != null && x.Details.ToLower().Contains(term));
+        }
+
+        var totalCount = await query.CountAsync();
+
+        var items = await query
+            .OrderByDescending(x => x.OccurredAtUtc)
+            .Skip((_page - 1) * PageSize)
+            .Take(PageSize)
+            .ToListAsync();
+
+        _result = new PagedResult<ActivityLog>(items, totalCount, _page, PageSize);
+        _loading = false;
+    }
+
+    private async Task FilterChangedAsync()
+    {
+        // Reset action filter if it doesn't belong to the selected entity type
+        if (_filterAction is not null && !GetAvailableActions().Any(a => a.Value == _filterAction))
+            _filterAction = null;
+
+        _page = 1;
+        await LoadAsync();
+    }
+    private async Task GoToPageAsync(int page) { _page = page; await LoadAsync(); }
+
+    private string GetEntityName(ActivityLog log)
+    {
+        return log.EntityType switch
+        {
+            "Task" => _taskTitles.TryGetValue(log.EntityId, out var t)
+                ? t
+                : ExtractNameFromDetails(log.Details) ?? $"Task #{log.EntityId} (deleted)",
+
+            "Project" => _projectNames.TryGetValue(log.EntityId, out var p)
+                ? p
+                : ExtractNameFromDetails(log.Details) ?? $"Project #{log.EntityId} (deleted)",
+
+            "TeamMember" => _memberNames.TryGetValue(log.EntityId, out var m)
+                ? m
+                : ExtractNameFromDetails(log.Details) ?? $"Member #{log.EntityId} (deleted)",
+
+            _ => $"#{log.EntityId}"
+        };
+    }
+
+    private static string ActionBadge(string action) => action switch
+    {
+        "TaskCreated" or "ProjectCreated" or "MemberCreated" => "badge-active",
+        "StatusChanged" or "ProjectUpdated" or "MemberUpdated" => "badge-inprogress",
+        "AssigneeChanged" or "MemberStatusChanged" => "badge-medium",
+        "TaskDeleted" or "ProjectArchived" => "badge-blocked",
+        _ => "badge-backlog"
+    };
+
+    private static string ActionLabel(string action) => action switch
+    {
+        "TaskCreated"         => "Created",
+        "StatusChanged"       => "Status Changed",
+        "AssigneeChanged"     => "Assignee Changed",
+        "TaskDeleted"         => "Deleted",
+        "ProjectCreated"      => "Created",
+        "ProjectUpdated"      => "Updated",
+        "ProjectArchived"     => "Archived",
+        "MemberCreated"       => "Added",
+        "MemberUpdated"       => "Updated",
+        "MemberStatusChanged" => "Status Changed",
+        _                     => action
+    };
+
+    private static string ActionIcon(string action) => action switch
+    {
+        "TaskCreated"         => "✅",
+        "StatusChanged"       => "🔄",
+        "AssigneeChanged"     => "👤",
+        "TaskDeleted"         => "🗑️",
+        "ProjectCreated"      => "📁",
+        "ProjectUpdated"      => "✏️",
+        "ProjectArchived"     => "📦",
+        "MemberCreated"       => "👥",
+        "MemberUpdated"       => "✏️",
+        "MemberStatusChanged" => "🔘",
+        _                     => "📋"
+    };
+
+    private static string EntityBadge(string entityType) => entityType switch
+    {
+        "Task"       => "badge-inprogress",
+        "Project"    => "badge-medium",
+        "TeamMember" => "badge-active",
+        _            => "badge-backlog"
+    };
+
+    private static string EntityIcon(string entityType) => entityType switch
+    {
+        "Task"       => "✅",
+        "Project"    => "📁",
+        "TeamMember" => "👤",
+        _            => "📋"
+    };
+
+    private record ActionOption(string Value, string Label);
+
+    private IEnumerable<ActionOption> GetAvailableActions() => _filterEntityType switch
+    {
+        "Task" => new[]
+        {
+            new ActionOption("TaskCreated",       "Task Created"),
+            new ActionOption("StatusChanged",     "Status Changed"),
+            new ActionOption("AssigneeChanged",   "Assignee Changed"),
+            new ActionOption("TaskDeleted",       "Task Deleted"),
+        },
+        "Project" => new[]
+        {
+            new ActionOption("ProjectCreated",  "Project Created"),
+            new ActionOption("ProjectUpdated",  "Project Updated"),
+            new ActionOption("ProjectArchived", "Project Archived"),
+            new ActionOption("ProjectDeleted",  "Project Deleted"),
+        },
+        "TeamMember" => new[]
+        {
+            new ActionOption("MemberCreated",       "Member Added"),
+            new ActionOption("MemberUpdated",       "Member Updated"),
+            new ActionOption("MemberStatusChanged", "Member Status Changed"),
+            new ActionOption("MemberDeleted",       "Member Deleted"),
+        },
+        _ => new[]
+        {
+            new ActionOption("TaskCreated",         "Task Created"),
+            new ActionOption("StatusChanged",       "Status Changed"),
+            new ActionOption("AssigneeChanged",     "Assignee Changed"),
+            new ActionOption("TaskDeleted",         "Task Deleted"),
+            new ActionOption("ProjectCreated",      "Project Created"),
+            new ActionOption("ProjectUpdated",      "Project Updated"),
+            new ActionOption("ProjectArchived",     "Project Archived"),
+            new ActionOption("ProjectDeleted",      "Project Deleted"),
+            new ActionOption("MemberCreated",       "Member Added"),
+            new ActionOption("MemberUpdated",       "Member Updated"),
+            new ActionOption("MemberStatusChanged", "Member Status Changed"),
+            new ActionOption("MemberDeleted",       "Member Deleted"),
+        }
+    };
+    private static string? ExtractNameFromDetails(string? details)
+    {
+        if (string.IsNullOrEmpty(details)) return null;
+        var start = details.IndexOf("['");
+        if (start >= 0)
+        {
+            var end = details.IndexOf("']", start + 2);
+            if (end > start) return details[(start + 2)..end];
+        }
+        // Fallback: original format with single quotes
+        var s = details.IndexOf('\'');
+        var e = details.IndexOf('\'', s + 1);
+        if (s < 0 || e < 0) return null;
+        return details[(s + 1)..e];
+}
+}

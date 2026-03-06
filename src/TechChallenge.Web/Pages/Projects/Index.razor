@@ -1,0 +1,402 @@
+@page "/projects"
+@inject IProjectService ProjectService
+
+<PageTitle>Projects – TaskFlow Pro</PageTitle>
+
+<!-- Page header -->
+<div class="flex justify-between items-center mb-6">
+    <div>
+        <h1 style="font-size:22px;font-weight:700;margin-bottom:4px;">Projects</h1>
+        <p class="text-muted">Manage your team's projects</p>
+    </div>
+    <button class="btn btn-primary" @onclick="OpenCreate">+ New Project</button>
+</div>
+
+<!-- Filter: show/hide archived projects -->
+<div class="filters-bar mb-4">
+    <label style="display:flex;align-items:center;gap:8px;color:var(--text-dim);font-size:13px;cursor:pointer;">
+        <input type="checkbox" checked="@_showArchived"
+       @onchange="async e => { _showArchived = (bool)e.Value!; await FilterChangedAsync(); }" />
+        Show archived projects
+    </label>
+</div>
+
+@if (_loading)
+{
+    <!-- Loading state -->
+    <div class="empty-state"><div class="spinner"></div></div>
+}
+else if (_projects.Count == 0)
+{
+    <!-- Empty state -->
+    <div class="card">
+        <div class="empty-state">
+            <div class="empty-icon">📁</div>
+            <div class="empty-title">No projects yet</div>
+            <div class="empty-sub">Create your first project to get started</div>
+            <button class="btn btn-primary" style="margin-top:8px;" @onclick="OpenCreate">
+                + New Project
+            </button>
+        </div>
+    </div>
+}
+else
+{
+    <!-- Projects table -->
+    <div class="card">
+        <div class="table-wrap">
+            <table class="tf-table">
+                <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>Code</th>
+                        <th>Status</th>
+                        <th>Tasks</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var p in _projects)
+                    {
+                        <tr>
+                            <td style="color:var(--text);font-weight:500;">@p.Name</td>
+                            <td><span class="badge badge-inprogress">@p.Code</span></td>
+                            <td>
+                                @if (p.IsArchived)
+                                {
+                                    <span class="badge badge-archived">Archived</span>
+                                }
+                                else
+                                {
+                                    <span class="badge badge-active">Active</span>
+                                }
+                            </td>
+                            <td class="text-dim">@p.Tasks.Count task(s)</td>
+                            <td>
+                                <div class="flex gap-2">
+                                    <button class="btn btn-ghost btn-sm"
+                                            @onclick="() => OpenEdit(p)"
+                                            aria-label="Edit @p.Name">
+                                        ✏️ Edit
+                                    </button>
+                                    <button class="btn btn-sm @(p.IsArchived ? "btn-success" : "btn-warning")"
+                                            @onclick="() => ToggleArchiveAsync(p)"
+                                            aria-label="@(p.IsArchived ? "Unarchive" : "Archive") @p.Name">
+                                        @(p.IsArchived ? "✅ Unarchive" : "📦 Archive")
+                                    </button>
+                                    <button class="btn btn-danger btn-sm"
+                                        @onclick="() => OpenDelete(p)"
+                                        aria-label="Delete @p.Name">
+                                    🗑️ Delete
+                                    </button>
+                                </div>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+        <Pagination T="Project" Result="_result" OnPageChange="GoToPageAsync" />
+    </div>
+}
+
+<!-- Toast notification -->
+@if (_message is not null)
+{
+    <div class="toast-container">
+        <div class="alert @(_isError ? "alert-danger" : "alert-success")">
+            @(_isError ? "⚠️" : "✅") @_message
+        </div>
+    </div>
+}
+
+<!-- Create / Edit modal -->
+@if (_showModal)
+{
+    <div class="modal-backdrop" @onclick="CloseModal">
+        <div class="modal" @onclick:stopPropagation="true" role="dialog"
+             aria-modal="true" aria-labelledby="modal-title">
+            <div class="modal-header">
+                <div class="modal-title" id="modal-title">
+                    @(_editId is null ? "New Project" : "Edit Project")
+                </div>
+                <button class="btn btn-ghost btn-sm btn-icon"
+                        @onclick="CloseModal" aria-label="Close modal">✕</button>
+            </div>
+
+            <EditForm Model="_form" OnValidSubmit="SaveAsync">
+                <DataAnnotationsValidator />
+
+                <div class="modal-body">
+                    <!-- Service-level error (e.g. duplicate name/code) -->
+                    @if (_formError is not null)
+                    {
+                        <div class="alert alert-danger">⚠️ @_formError</div>
+                    }
+
+                    <div class="form-group">
+                        <label class="form-label" for="pname">Name *</label>
+                        <InputText id="pname"
+                                   class="form-control"
+                                   @bind-Value="_form.Name"
+                                   placeholder="e.g. Backend Rewrite"
+                                   autocomplete="off" />
+                        <ValidationMessage For="() => _form.Name" class="validation-message" />
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label" for="pcode">Code *</label>
+                        <InputText id="pcode"
+                                   class="form-control"
+                                   @bind-Value="_form.Code"
+                                   placeholder="e.g. BE-RW"
+                                   autocomplete="off" />
+                        <ValidationMessage For="() => _form.Code" class="validation-message" />
+                        <div class="form-hint">Short unique identifier, max 20 characters. Will be uppercased.</div>
+                    </div>
+                </div>
+
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-ghost" @onclick="CloseModal">Cancel</button>
+                    <button type="submit" class="btn btn-primary" disabled="@_saving">
+                        @if (_saving)
+                        {
+                            <span class="spinner" style="width:14px;height:14px;border-width:2px;"></span>
+                        }
+                        @(_editId is null ? "Create Project" : "Save Changes")
+                    </button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+       @if (_showDeleteModal && _deleteCandidate is not null)
+            {
+                <div class="modal-backdrop" @onclick="() => _showDeleteModal = false">
+                    <div class="modal" style="max-width:420px;" @onclick:stopPropagation="true">
+                        <div class="modal-header">
+                            <div class="modal-title">Delete Project</div>
+                            <button class="btn btn-ghost btn-sm btn-icon"
+                                    @onclick="() => _showDeleteModal = false">✕</button>
+                        </div>
+                        <div class="modal-body">
+                            <div class="alert alert-danger">
+                                ⚠️ This action cannot be undone.
+                            </div>
+                            <p style="color:var(--text);margin-bottom:8px;">
+                                Are you sure you want to delete <strong>@_deleteCandidate.Name</strong>?
+                            </p>
+                            @if (_deleteCandidate.Tasks.Count > 0)
+                            {
+                                <div class="alert alert-warning">
+                                    📋 This project has <strong>@_deleteCandidate.Tasks.Count task(s)</strong>
+                                    that will also be permanently deleted.
+                                </div>
+                            }
+                        </div>
+                        <div class="modal-footer">
+                            <button class="btn btn-ghost" @onclick="() => _showDeleteModal = false">Cancel</button>
+                            <button class="btn btn-danger" @onclick="ConfirmDeleteAsync">
+                                🗑️ Delete Project
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            }
+
+@code {
+    // ── State ──────────────────────────────────────────────────────────────
+    private bool _loading    = true;
+    private bool _showModal  = false;
+    private bool _saving     = false;
+    private bool _showArchived = false;
+    private bool _isError    = false;
+    private string? _message;
+    private string? _formError;
+    private int? _editId;
+    private PagedResult<Project> _result  = new(new(), 0, 1, 15);
+    private List<Project>        _projects => _result.Items;
+    private int                  _page    = 1;
+    private const int            PageSize = 15;
+    private ProjectForm _form = new();
+
+
+    // ── Lifecycle ──────────────────────────────────────────────────────────
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    // ── Data loading ───────────────────────────────────────────────────────
+
+    /// <summary>Reloads the project list, respecting the archive filter.</summary>
+        private async Task LoadAsync()
+    {
+        _loading = true;
+        _result  = await ProjectService.ListAsync(
+            includeArchived: _showArchived,
+            page:            _page,
+            pageSize:        PageSize);
+        _loading = false;
+    }
+
+    // ── Modal helpers ──────────────────────────────────────────────────────
+
+    /// <summary>Opens the modal in create mode.</summary>
+    private void OpenCreate()
+    {
+        _form      = new();
+        _editId    = null;
+        _formError = null;
+        _showModal = true;
+    }
+
+    /// <summary>Opens the modal in edit mode, pre-filling the form with existing data.</summary>
+    private void OpenEdit(Project p)
+    {
+        _form      = new ProjectForm { Name = p.Name, Code = p.Code };
+        _editId    = p.Id;
+        _formError = null;
+        _showModal = true;
+    }
+
+    private void CloseModal() => _showModal = false;
+
+    // ── Actions ────────────────────────────────────────────────────────────
+
+    /// <summary>Handles form submission for both create and edit flows.</summary>
+    private async Task SaveAsync()
+    {
+        _saving    = true;
+        _formError = null;
+
+        var project = new Project
+        {
+            Id   = _editId ?? 0,
+            Name = _form.Name.Trim(),
+            Code = _form.Code.Trim().ToUpper()
+        };
+
+        var (ok, err) = _editId is null
+            ? await ProjectService.CreateAsync(project)
+            : await ProjectService.UpdateAsync(project);
+
+        _saving = false;
+
+        if (ok)
+        {
+            _showModal = false;
+
+            if (_editId is null)
+            {
+                 ShowToastAsync("Project created successfully.", isError: false);
+                 await LoadAsync();
+            }
+            else
+            {
+                // Optimistic update — reflect changes in memory immediately
+                var existing = _projects.FirstOrDefault(p => p.Id == _editId);
+                if (existing is not null)
+                {
+                    existing.Name = project.Name;
+                    existing.Code = project.Code;
+                }
+                 ShowToastAsync("Project updated successfully.", isError: false);
+            }
+        }
+        else
+        {
+            _formError = err;
+        }
+    }
+
+        private void OpenDelete(Project p)
+    {
+        _deleteCandidate = p;
+        _showDeleteModal = true;
+    }
+
+    private async Task ConfirmDeleteAsync()
+    {
+        if (_deleteCandidate is null) return;
+
+        var ok = await ProjectService.DeleteAsync(_deleteCandidate.Id);
+        _showDeleteModal = false;
+
+        if (ok)
+        {
+            _result = new PagedResult<Project>(
+                _projects.Where(x => x.Id != _deleteCandidate.Id).ToList(),
+                _result.TotalCount - 1,
+                _result.Page,
+                _result.PageSize);
+             ShowToastAsync("Project deleted successfully.", isError: false);
+        }
+        else
+        {
+             ShowToastAsync("Failed to delete project.", isError: true);
+        }
+
+        _deleteCandidate = null;
+    }
+
+    /// <summary>Toggles the archive state of a project.</summary>
+    private async Task ToggleArchiveAsync(Project p)
+    {
+        var wasArchived = p.IsArchived;
+
+        var ok = await ProjectService.ArchiveAsync(p.Id);
+
+        if (ok)
+        {
+            // If archiving and not showing archived, remove from list
+            if (!wasArchived && !_showArchived)
+                _result = new PagedResult<Project>(
+                    _projects.Where(x => x.Id != p.Id).ToList(),
+                    _result.TotalCount - 1,
+                    _result.Page,
+                    _result.PageSize);
+            else
+                p.IsArchived = !wasArchived;
+
+             ShowToastAsync(
+                wasArchived ? "Project restored successfully." : "Project archived.",
+                isError: false);
+        }
+        else
+        {
+             ShowToastAsync("Failed to update project.", isError: true);
+        }
+    }
+
+    /// <summary>Displays a temporary toast notification for 3 seconds.</summary>
+    private void ShowToastAsync(string message, bool isError)
+    {
+        _message = message;
+        _isError = isError;
+        StateHasChanged();
+        _ = Task.Delay(3000).ContinueWith(_ =>
+        {
+            _message = null;
+            InvokeAsync(StateHasChanged);
+        });
+    }
+    private async Task FilterChangedAsync() { _page = 1; await LoadAsync(); }
+    private async Task GoToPageAsync(int page) { _page = page; await LoadAsync(); }
+
+    // ── Form model with validation attributes ──────────────────────────────
+
+    /// <summary>Form model used for create and edit operations.</summary>
+    private class ProjectForm
+    {
+        [System.ComponentModel.DataAnnotations.Required(ErrorMessage = "Name is required.")]
+        [System.ComponentModel.DataAnnotations.MaxLength(100, ErrorMessage = "Name cannot exceed 100 characters.")]
+        public string Name { get; set; } = "";
+
+        [System.ComponentModel.DataAnnotations.Required(ErrorMessage = "Code is required.")]
+        [System.ComponentModel.DataAnnotations.MaxLength(20, ErrorMessage = "Code cannot exceed 20 characters.")]
+        public string Code { get; set; } = "";
+    }
+
+    private Project? _deleteCandidate;
+    private bool     _showDeleteModal = false;
+    
+}

@@ -1,0 +1,416 @@
+@page "/members"
+@inject ITeamMemberService MemberService
+
+<PageTitle>Team Members – TaskFlow Pro</PageTitle>
+
+<!-- Page header -->
+<div class="flex justify-between items-center mb-6">
+    <div>
+        <h1 style="font-size:22px;font-weight:700;margin-bottom:4px;">Team Members</h1>
+        <p class="text-muted">Manage who can be assigned to tasks</p>
+    </div>
+    <button class="btn btn-primary" @onclick="OpenCreate">+ New Member</button>
+</div>
+
+<!-- Filter: show only active members -->
+<div class="filters-bar mb-4">
+    <label style="display:flex;align-items:center;gap:8px;color:var(--text-dim);font-size:13px;cursor:pointer;">
+        <input type="checkbox" checked="@_onlyActive"
+       @onchange="async e => { _onlyActive = (bool)e.Value!; await FilterChangedAsync(); }" />
+        Show active members only
+    </label>
+</div>
+
+@if (_loading)
+{
+    <div class="empty-state"><div class="spinner"></div></div>
+}
+else if (_members.Count == 0)
+{
+    <!-- Empty state -->
+    <div class="card">
+        <div class="empty-state">
+            <div class="empty-icon">👥</div>
+            <div class="empty-title">No team members yet</div>
+            <div class="empty-sub">Add your first team member to start assigning tasks</div>
+            <button class="btn btn-primary" style="margin-top:8px;" @onclick="OpenCreate">
+                + New Member
+            </button>
+        </div>
+    </div>
+}
+else
+{
+    <!-- Members table -->
+    <div class="card">
+        <div class="table-wrap">
+            <table class="tf-table">
+                <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>Email</th>
+                        <th>Status</th>
+                        <th>Assigned Tasks</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var m in _members)
+                    {
+                        <tr>
+                            <td style="color:var(--text);font-weight:500;">
+                                <div style="display:flex;align-items:center;gap:10px;">
+                                    <!-- Avatar placeholder using initials -->
+                                    <div style="width:32px;height:32px;border-radius:50%;background:var(--accent);
+                                                display:flex;align-items:center;justify-content:center;
+                                                font-size:12px;font-weight:700;color:#fff;flex-shrink:0;">
+                                        @GetInitials(m.FullName)
+                                    </div>
+                                    @m.FullName
+                                </div>
+                            </td>
+                            <td class="text-dim">@m.Email</td>
+                            <td>
+                                @if (m.IsActive)
+                                {
+                                    <span class="badge badge-active">Active</span>
+                                }
+                                else
+                                {
+                                    <span class="badge badge-inactive">Inactive</span>
+                                }
+                            </td>
+                            <td class="text-dim">@m.AssignedTasks.Count task(s)</td>
+                            <td>
+                                <div class="flex gap-2">
+                                    <button class="btn btn-ghost btn-sm"
+                                            @onclick="() => OpenEdit(m)"
+                                            aria-label="Edit @m.FullName">
+                                        ✏️ Edit
+                                    </button>
+                                    <button class="btn btn-sm @(m.IsActive ? "btn-warning" : "btn-success")"
+                                            @onclick="() => ToggleActiveAsync(m)"
+                                            aria-label="@(m.IsActive ? "Deactivate" : "Activate") @m.FullName">
+                                        @(m.IsActive ? "⏸ Deactivate" : "▶️ Activate")
+                                    </button>
+                                    <button class="btn btn-danger btn-sm"
+                                            @onclick="() => OpenDelete(m)"
+                                            aria-label="Delete @m.FullName">
+                                        🗑️ Delete
+                                    </button>
+                                </div>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+        <Pagination T="TeamMember" Result="_result" OnPageChange="GoToPageAsync" />
+    </div>
+}
+@if (_showDeleteModal && _deleteCandidate is not null)
+{
+    <div class="modal-backdrop" @onclick="() => _showDeleteModal = false">
+        <div class="modal" style="max-width:420px;" @onclick:stopPropagation="true">
+            <div class="modal-header">
+                <div class="modal-title">Delete Team Member</div>
+                <button class="btn btn-ghost btn-sm btn-icon"
+                        @onclick="() => _showDeleteModal = false">✕</button>
+            </div>
+            <div class="modal-body">
+                <div class="alert alert-danger">
+                    ⚠️ This action cannot be undone.
+                </div>
+                <p style="color:var(--text);margin-bottom:8px;">
+                    Are you sure you want to delete <strong>@_deleteCandidate.FullName</strong>?
+                </p>
+                @if (_deleteCandidate.AssignedTasks.Count > 0)
+                {
+                    <div class="alert alert-warning">
+                        📋 This member has <strong>@_deleteCandidate.AssignedTasks.Count task(s)</strong>
+                        that will also be permanently deleted.
+                    </div>
+                }
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-ghost" @onclick="() => _showDeleteModal = false">Cancel</button>
+                <button class="btn btn-danger" @onclick="ConfirmDeleteAsync">
+                    🗑️ Delete Member
+                </button>
+            </div>
+        </div>
+    </div>
+}
+
+<!-- Toast notification -->
+@if (_message is not null)
+{
+    <div class="toast-container">
+        <div class="alert @(_isError ? "alert-danger" : "alert-success")">
+            @(_isError ? "⚠️" : "✅") @_message
+        </div>
+    </div>
+}
+
+<!-- Create / Edit modal -->
+@if (_showModal)
+{
+    <div class="modal-backdrop" @onclick="CloseModal">
+        <div class="modal" @onclick:stopPropagation="true" role="dialog"
+             aria-modal="true" aria-labelledby="modal-title">
+            <div class="modal-header">
+                <div class="modal-title" id="modal-title">
+                    @(_editId is null ? "New Team Member" : "Edit Team Member")
+                </div>
+                <button class="btn btn-ghost btn-sm btn-icon"
+                        @onclick="CloseModal" aria-label="Close modal">✕</button>
+            </div>
+
+            <EditForm Model="_form" OnValidSubmit="SaveAsync">
+                <DataAnnotationsValidator />
+
+                <div class="modal-body">
+                    <!-- Service-level error (e.g. duplicate email) -->
+                    @if (_formError is not null)
+                    {
+                        <div class="alert alert-danger">⚠️ @_formError</div>
+                    }
+
+                    <div class="form-group">
+                        <label class="form-label" for="mname">Full Name *</label>
+                        <InputText id="mname"
+                                   class="form-control"
+                                   @bind-Value="_form.FullName"
+                                   placeholder="e.g. Jane Doe"
+                                   autocomplete="off" />
+                        <ValidationMessage For="() => _form.FullName" class="validation-message" />
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label" for="memail">Email *</label>
+                        <InputText id="memail"
+                                   class="form-control"
+                                   @bind-Value="_form.Email"
+                                   placeholder="e.g. jane@company.com"
+                                   autocomplete="off"
+                                   type="email" />
+                        <ValidationMessage For="() => _form.Email" class="validation-message" />
+                    </div>
+                </div>
+
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-ghost" @onclick="CloseModal">Cancel</button>
+                    <button type="submit" class="btn btn-primary" disabled="@_saving">
+                        @if (_saving)
+                        {
+                            <span class="spinner" style="width:14px;height:14px;border-width:2px;"></span>
+                        }
+                        @(_editId is null ? "Add Member" : "Save Changes")
+                    </button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@code {
+    // ── State ──────────────────────────────────────────────────────────────
+    private bool _loading    = true;
+    private bool _showModal  = false;
+    private bool _saving     = false;
+    private bool _onlyActive = false;
+    private bool _isError    = false;
+    private string? _message;
+    private string? _formError;
+    private int? _editId;
+    private PagedResult<TeamMember> _result  = new(new(), 0, 1, 15);
+    private List<TeamMember>        _members => _result.Items;
+    private int                     _page    = 1;
+    private const int               PageSize = 15;
+    private MemberForm _form = new();
+
+    // ── Lifecycle ──────────────────────────────────────────────────────────
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    // ── Data loading ───────────────────────────────────────────────────────
+
+    /// <summary>Reloads the member list, respecting the active filter.</summary>
+        private async Task LoadAsync()
+    {
+        _loading = true;
+        _result  = await MemberService.ListAsync(
+            onlyActive: _onlyActive,
+            page:       _page,
+            pageSize:   PageSize);
+        _loading = false;
+    }
+
+    // ── Modal helpers ──────────────────────────────────────────────────────
+
+    /// <summary>Opens the modal in create mode.</summary>
+    private void OpenCreate()
+    {
+        _form      = new();
+        _editId    = null;
+        _formError = null;
+        _showModal = true;
+    }
+
+    /// <summary>Opens the modal in edit mode with existing member data.</summary>
+    private void OpenEdit(TeamMember m)
+    {
+        _form      = new MemberForm { FullName = m.FullName, Email = m.Email };
+        _editId    = m.Id;
+        _formError = null;
+        _showModal = true;
+    }
+
+    private void CloseModal() => _showModal = false;
+
+    // ── Actions ────────────────────────────────────────────────────────────
+
+    /// <summary>Handles form submission for both create and edit flows.</summary>
+    private async Task SaveAsync()
+    {
+        _saving    = true;
+        _formError = null;
+
+        var member = new TeamMember
+        {
+            Id       = _editId ?? 0,
+            FullName = _form.FullName.Trim(),
+            Email    = _form.Email.Trim().ToLower()
+        };
+
+        var (ok, err) = _editId is null
+            ? await MemberService.CreateAsync(member)
+            : await MemberService.UpdateAsync(member);
+
+        _saving = false;
+
+        if (ok)
+        {
+            _showModal = false;
+            if (_editId is null)
+            {
+                 ShowToastAsync("Member added successfully.", isError: false);
+                await LoadAsync();
+            }
+            else
+            {
+                var existing = _members.FirstOrDefault(m => m.Id == _editId);
+                if (existing is not null)
+                {
+                    existing.FullName = member.FullName;
+                    existing.Email    = member.Email;
+                }
+                 ShowToastAsync("Member updated successfully.", isError: false);
+            }
+        }
+        else
+        {
+            _formError = err;
+        }
+    }
+
+        private void OpenDelete(TeamMember m)
+    {
+        _deleteCandidate = m;
+        _showDeleteModal = true;
+    }
+
+    private async Task ConfirmDeleteAsync()
+    {
+        if (_deleteCandidate is null) return;
+
+        var ok = await MemberService.DeleteAsync(_deleteCandidate.Id);
+        _showDeleteModal = false;
+
+        if (ok)
+        {
+            _result = new PagedResult<TeamMember>(
+                _members.Where(x => x.Id != _deleteCandidate.Id).ToList(),
+                _result.TotalCount - 1,
+                _result.Page,
+                _result.PageSize);
+             ShowToastAsync("Member deleted successfully.", isError: false);
+        }
+        else
+        {
+             ShowToastAsync("Failed to delete member.", isError: true);
+        }
+
+        _deleteCandidate = null;
+    }
+    /// <summary>Toggles the active state of a team member.</summary>
+    private async Task ToggleActiveAsync(TeamMember m)
+    {
+        var wasActive = m.IsActive;
+
+        var ok = await MemberService.ToggleActiveAsync(m.Id);
+
+        if (ok)
+        {
+            if (_onlyActive && wasActive)
+                _result = new PagedResult<TeamMember>(
+                    _members.Where(x => x.Id != m.Id).ToList(),
+                    _result.TotalCount - 1,
+                    _result.Page,
+                    _result.PageSize);
+            else
+                m.IsActive = !wasActive;
+
+             ShowToastAsync(
+                wasActive ? "Member deactivated." : "Member activated.",
+                isError: false);
+        }
+        else
+        {
+             ShowToastAsync("Failed to update member.", isError: true);
+        }
+    }
+
+    /// <summary>Displays a temporary toast notification for 3 seconds.</summary>
+private void ShowToastAsync(string message, bool isError)
+    {
+        _message = message;
+        _isError = isError;
+        StateHasChanged();
+        _ = Task.Delay(3000).ContinueWith(_ =>
+        {
+            _message = null;
+            InvokeAsync(StateHasChanged);
+        });
+    }
+
+    /// <summary>Returns up to 2 uppercase initials from a full name.</summary>
+    private static string GetInitials(string fullName)
+    {
+        var parts = fullName.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return parts.Length switch
+        {
+            0 => "?",
+            1 => parts[0][..1].ToUpper(),
+            _ => $"{parts[0][0]}{parts[^1][0]}".ToUpper()
+        };
+    }
+
+    private async Task FilterChangedAsync() { _page = 1; await LoadAsync(); }
+    private async Task GoToPageAsync(int page) { _page = page; await LoadAsync(); }
+
+    // ── Form model with validation attributes ──────────────────────────────
+
+    /// <summary>Form model used for create and edit operations.</summary>
+    private class MemberForm
+    {
+        [System.ComponentModel.DataAnnotations.Required(ErrorMessage = "Full name is required.")]
+        [System.ComponentModel.DataAnnotations.MaxLength(120, ErrorMessage = "Name cannot exceed 120 characters.")]
+        public string FullName { get; set; } = "";
+
+        [System.ComponentModel.DataAnnotations.Required(ErrorMessage = "Email is required.")]
+        [System.ComponentModel.DataAnnotations.EmailAddress(ErrorMessage = "Please enter a valid email address.")]
+        public string Email { get; set; } = "";
+    }
+    private TeamMember? _deleteCandidate;
+    private bool        _showDeleteModal = false;
+}
