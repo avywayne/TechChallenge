@@ -126,4 +126,5 @@ F:\Documents\Challenge\blazor-hiring-challenge\starter\src\TechChallenge.Web\obj
 F:\Documents\Challenge\blazor-hiring-challenge\starter\src\TechChallenge.Web\obj\Debug\net9.0\TechChallenge.Web.RazorAssemblyInfo.cache
 F:\Documents\Challenge\blazor-hiring-challenge\starter\src\TechChallenge.Web\obj\Debug\net9.0\TechChallenge.Web.RazorAssemblyInfo.cs
 F:\Documents\Challenge\blazor-hiring-challenge\starter\src\TechChallenge.Web\bin\Debug\net9.0\TechChallenge.Web.staticwebassets.runtime.json
-F:\Documents\Challenge\blazor-hiring-challenge\starter\src\TechChallenge.Web\obj\Debug\net9.0\compressed\lj08w0wgf3-c4p081htok.gz
+F:\Documents\Challenge\blazor-hiring-challenge\starter\src\TechChallenge.Web\obj\Debug\net9.0\TechChallenge.Web.sourcelink.json
+F:\Documents\Challenge\blazor-hiring-challenge\starter\src\TechChallenge.Web\obj\Debug\net9.0\compressed\lj08w0wgf3-qgmlv1bhll.gz

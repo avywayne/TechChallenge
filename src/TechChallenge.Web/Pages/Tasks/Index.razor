@@ -595,7 +595,7 @@ else
                 </p>
                 @if (StateMachine.IsFastClose(_transitionTask.Status, _pendingStatus))
                 {
-                    <div class="alert alert-danger" style="margin-bottom:12px;">
+                   <div class="alert alert-danger" style="margin-bottom:12px; white-space:normal;",>
                         ⚡ This task will be marked as <strong>fast-closed</strong> — it skipped the normal workflow.
                     </div>
                 }
@@ -1113,11 +1113,38 @@ else
             _                     => TaskStatus.Backlog
         };
 
-        await TaskService.ChangeStatusAsync(subTask.Id, next);
-        _subTasks[parentId] = await TaskService.GetSubTasksAsync(parentId);
-        await LoadAsync();
-    }
+        // Optimistic update
+        var old = subTask.Status;
+        subTask.Status = next;
+        StateHasChanged();
 
+        // Bypass state machine for subtasks — use direct update
+        var entity = new TaskItem
+        {
+            Id             = subTask.Id,
+            Title          = subTask.Title,
+            Description    = subTask.Description,
+            Priority       = subTask.Priority,
+            ProjectId      = subTask.ProjectId,
+            AssigneeId     = subTask.AssigneeId,
+            DueDate        = subTask.DueDate,
+            EstimatedHours = subTask.EstimatedHours,
+            ActualHours    = subTask.ActualHours,
+            Status         = next,
+        };
+
+        var (ok, err) = await TaskService.ChangeStatusAsync(subTask.Id, next, reason: "Subtask cycle");
+        if (!ok)
+        {
+            subTask.Status = old;
+            StateHasChanged();
+            ShowToastAsync(err ?? "Could not update subtask status.", true);
+        }
+        else
+        {
+            _subTasks[parentId] = await TaskService.GetSubTasksAsync(parentId);
+        }
+    }
     /// <summary>Deletes a subtask and refreshes the parent list.</summary>
     private async Task DeleteSubTaskAsync(int subTaskId, int parentId)
     {

@@ -122,3 +122,4 @@ F:\Documents\Challenge\blazor-hiring-challenge\starter\tests\TechChallenge.Tests
 F:\Documents\Challenge\blazor-hiring-challenge\starter\tests\TechChallenge.Tests\obj\Debug\net9.0\TechChallenge.Tests.pdb
 F:\Documents\Challenge\blazor-hiring-challenge\starter\tests\TechChallenge.Tests\obj\Debug\net9.0\TechChallenge.Tests.genruntimeconfig.cache
 F:\Documents\Challenge\blazor-hiring-challenge\starter\tests\TechChallenge.Tests\obj\Debug\net9.0\ref\TechChallenge.Tests.dll
+F:\Documents\Challenge\blazor-hiring-challenge\starter\tests\TechChallenge.Tests\obj\Debug\net9.0\TechChallenge.Tests.sourcelink.json
